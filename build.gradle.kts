@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm") version "2.4.0-Beta2"
+    kotlin("jvm") version "2.1.0"
     id("com.gradleup.shadow") version "8.3.0"
     id("xyz.jpenilla.run-paper") version "2.3.1"
 }
@@ -9,22 +9,18 @@ version = "1.0"
 
 repositories {
     mavenCentral()
-    maven("https://repo.papermc.io/repository/maven-public/") {
-        name = "papermc-repo"
-    }
+    maven("https://repo.papermc.io/repository/maven-public/")
 }
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
+    compileOnly("net.dmulloy2:ProtocolLib:5.4.0-SNAPSHOT")
+    implementation(kotlin("stdlib"))
 }
 
 tasks {
     runServer {
-        // Configure the Minecraft version for our task.
-        // This is the only required configuration besides applying the plugin.
-        // Your plugin's jar (or shadowJar if present) will be used automatically.
-        minecraftVersion("1.21")
+        minecraftVersion("1.21.11")
     }
 }
 

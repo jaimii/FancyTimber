@@ -3,5 +3,6 @@ version: '1.0'
 main: project.kompass.fancyTrees.FancyTrees
 api-version: '1.21'
 authors: [ JustJaimii ]
+depend: [ ProtocolLib ]
 description:
   Makes Illagers fight zombies. For Project: Kompass
