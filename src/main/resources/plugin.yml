@@ -1,6 +1,6 @@
 name: FancyTrees
 version: '1.0'
-main: project.kompass.fancyTrees.FancyTrees
+main: project.kompass.fancyTimber.FancyTimber
 api-version: '1.21'
 authors: [ JustJaimii ]
 depend: [ ProtocolLib ]

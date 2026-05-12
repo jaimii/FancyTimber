@@ -1,4 +1,4 @@
-package project.kompass.fancyTrees
+package project.kompass.fancyTimber
 
 import com.comphenix.protocol.PacketType
 import com.comphenix.protocol.ProtocolLibrary
@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.max
 
-class FancyTrees : JavaPlugin(), Listener {
+class FancyTimber : JavaPlugin(), Listener {
 
     private val silentBlocks = ConcurrentHashMap.newKeySet<Location>()
 
