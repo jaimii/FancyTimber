@@ -177,9 +177,19 @@ class FancyTimber : JavaPlugin(), Listener {
                         newLocations.add(newLoc)
 
                         if (tick > 5 && info.offset.lengthSquared() > 0.5f) {
+                            // "Make the leaves avoid collision checks, and only the logs have collision when animation is executed"
+                            // If block is foliage (isTrunk == false), it intrinsically entirely ignores the collision checks below!
                             if (info.isTrunk) {
                                 val blockType = newLoc.block.type
-                                if (blockType.isSolid && blockType != Material.AIR && !isFoliage(blockType)) {
+
+                                val isVine = blockType == Material.VINE || blockType.name.endsWith("VINES") || blockType.name.endsWith("VINES_PLANT")
+                                val isPropagule = blockType == Material.MANGROVE_PROPAGULE
+                                val isMossCarpet = blockType == Material.MOSS_CARPET
+
+                                // "Make trees avoid vines, propagule, and moss carpet collision checks, have the animated tree go through them"
+                                val shouldIgnore = isFoliage(blockType) || isVine || isPropagule || isMossCarpet
+
+                                if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
                                     collided = true
                                 }
 

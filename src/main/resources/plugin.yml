@@ -5,4 +5,4 @@ api-version: '1.21'
 authors: [ JustJaimii ]
 depend: [ ProtocolLib ]
 description:
-  Makes Illagers fight zombies. For Project: Kompass
+ Enhanced timber animations. Designed for Project Kompass.
