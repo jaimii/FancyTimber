@@ -28,13 +28,17 @@ import org.bukkit.util.Transformation
 import org.bukkit.util.Vector
 import org.joml.Quaternionf
 import org.joml.Vector3f
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.max
 
 class FancyTimber : JavaPlugin(), Listener {
 
-    private val silentBlocks = ConcurrentHashMap.newKeySet<Location>()
+    // ProtocolLib Improvement: Uses custom lightweight BlockPos instead of heavy Bukkit Location
+    private data class BlockPos(val worldId: UUID, val x: Int, val y: Int, val z: Int)
+
+    private val silentBlocks = ConcurrentHashMap.newKeySet<BlockPos>()
 
     override fun onEnable() {
         server.pluginManager.registerEvents(this, this)
@@ -51,11 +55,11 @@ class FancyTimber : JavaPlugin(), Listener {
                     val packet = event.packet
                     val effectId = packet.integers.read(0)
 
-                    if (effectId == 2001) {
+                    if (effectId == 2001) { // Block Break particles and sound
                         val pos = packet.blockPositionModifier.read(0)
-                        val loc = Location(event.player.world, pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())
+                        val blockPos = BlockPos(event.player.world.uid, pos.x, pos.y, pos.z)
 
-                        if (silentBlocks.contains(loc)) {
+                        if (silentBlocks.contains(blockPos)) {
                             event.isCancelled = true
                         }
                     }
@@ -72,16 +76,25 @@ class FancyTimber : JavaPlugin(), Listener {
 
         if (!isTrunk(startBlock.type)) return
 
-        // 1.21.11 update: Uses registry tags instead of string checking. Rejects 1.21.11 Spears natively.
+        // 1.21.11 Mounts Of Mayhem update: Uses registry tags instead of string checking.
+        // Also naturally rejects 1.21.11 Spears since they are not formally tagged as axes.
         if (tool.type == Material.AIR || !Tag.ITEMS_AXES.isTagged(tool.type)) return
         if (!player.isSneaking) return
 
         val scanResult = detectTree(startBlock) ?: return
         val treeBlocks = scanResult.blocks
         val baseBlock = scanResult.baseBlock
+        val vines = scanResult.vines
 
         event.isDropItems = false
         val isCreative = player.gameMode == GameMode.CREATIVE
+
+        // Break attached vines directly. They will naturally drop items and disappear without spawning displays.
+        for (vine in vines) {
+            val vPos = BlockPos(vine.world.uid, vine.x, vine.y, vine.z)
+            silentBlocks.add(vPos)
+            vine.breakNaturally(tool)
+        }
 
         val hinge = baseBlock.location.add(0.5, 0.0, 0.5)
 
@@ -98,9 +111,15 @@ class FancyTimber : JavaPlugin(), Listener {
         val axisZ = axisDir.z.toFloat()
 
         val displaysAndDrops = mutableListOf<BlockDataInfo>()
+        var logsBroken = 0
 
         for (b in treeBlocks) {
-            silentBlocks.add(b.location)
+            val bPos = BlockPos(b.world.uid, b.x, b.y, b.z)
+            silentBlocks.add(bPos)
+
+            if (isTrunk(b.type)) {
+                logsBroken++
+            }
 
             val offset = Vector3f(
                 (b.x + 0.5 - hinge.x).toFloat(),
@@ -111,13 +130,18 @@ class FancyTimber : JavaPlugin(), Listener {
             val display = b.world.spawn(b.location.add(0.5, 0.0, 0.5), BlockDisplay::class.java) { entity ->
                 entity.block = b.blockData
                 entity.teleportDuration = 2
+                // Improvement: Avoid saving temporary visual entities in case the server shuts down or restarts
+                entity.isPersistent = false
             }
 
-            // 1.21 update: Get drops aware of the player's attributes & enchantments
             displaysAndDrops.add(BlockDataInfo(offset, display, b.getDrops(tool, player), isTrunk(b.type)))
-
-            // 1.21 update: Silences chunk physics update to prevent TPS drop during tree sweep
             b.setType(Material.AIR, false)
+        }
+
+        // Apply corresponding durability damage relative to the amount of broken logs
+        if (logsBroken > 1 && !isCreative) {
+            // Subtract 1 because the natively fired BlockBreakEvent handles the durability damage for the initial block broken
+            player.damageItemStack(org.bukkit.inventory.EquipmentSlot.HAND, logsBroken - 1)
         }
 
         startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.5f, 0.8f)
@@ -125,8 +149,6 @@ class FancyTimber : JavaPlugin(), Listener {
         object : BukkitRunnable() {
             var tick = 0
             val referenceTicks = 45.0f
-
-            // 1.21 update: New DamageSource API instance
             val damageSource = DamageSource.builder(DamageType.FALLING_BLOCK).build()
 
             override fun run() {
@@ -170,7 +192,6 @@ class FancyTimber : JavaPlugin(), Listener {
                                         if (entity == player && tick < 12) {
                                             continue
                                         }
-                                        // 1.21 update: Process damage using the required DamageSource data
                                         entity.damage(10.0, damageSource)
                                         collided = true
                                     }
@@ -206,7 +227,8 @@ class FancyTimber : JavaPlugin(), Listener {
         }.runTaskTimer(this, 1L, 1L)
 
         server.scheduler.runTaskLater(this, Runnable {
-            treeBlocks.forEach { silentBlocks.remove(it.location) }
+            treeBlocks.forEach { silentBlocks.remove(BlockPos(it.world.uid, it.x, it.y, it.z)) }
+            vines.forEach { silentBlocks.remove(BlockPos(it.world.uid, it.x, it.y, it.z)) }
         }, 10L)
     }
 
@@ -227,7 +249,6 @@ class FancyTimber : JavaPlugin(), Listener {
 
             if (!isCreative) {
                 for (drop in info.drops) {
-                    // 1.21 update: Utilize the item consumer callback to avoid 1-tick rendering glitches
                     world.dropItem(loc, drop) { item ->
                         item.velocity = direction.clone().multiply(0.4).setY(0.25)
                     }
@@ -274,6 +295,7 @@ class FancyTimber : JavaPlugin(), Listener {
         treeBlocks.addAll(trunks)
 
         val foliage = mutableSetOf<Block>()
+        val vines = mutableSetOf<Block>()
         val foliageQueue = ArrayDeque<Pair<Block, Int>>()
         for (t in trunks) {
             foliageQueue.add(Pair(t, 0))
@@ -294,21 +316,29 @@ class FancyTimber : JavaPlugin(), Listener {
 
                         if (!isNaturalEnvironment(adj.type)) return null
 
-                        if (adj !in trunks && adj !in foliage && isFoliage(adj.type)) {
-                            val blockData = adj.blockData
-                            var belongsToTree = true
+                        if (adj !in trunks && adj !in foliage && adj !in vines) {
+                            val type = adj.type
 
-                            if (blockData is Leaves) {
-                                if (!blockData.isPersistent && blockData.distance < dist + 1) {
-                                    belongsToTree = false
-                                }
-                            }
-
-                            if (belongsToTree) {
-                                foliage.add(adj)
+                            // Handle vines separating from falling animation
+                            if (type == Material.VINE) {
+                                vines.add(adj)
                                 foliageQueue.add(Pair(adj, dist + 1))
-                                treeBlocks.add(adj)
-                                foliageCount++
+                            } else if (isFoliage(type)) {
+                                val blockData = adj.blockData
+                                var belongsToTree = true
+
+                                if (blockData is Leaves) {
+                                    if (!blockData.isPersistent && blockData.distance < dist + 1) {
+                                        belongsToTree = false
+                                    }
+                                }
+
+                                if (belongsToTree) {
+                                    foliage.add(adj)
+                                    foliageQueue.add(Pair(adj, dist + 1))
+                                    treeBlocks.add(adj)
+                                    foliageCount++
+                                }
                             }
                         }
                     }
@@ -318,7 +348,7 @@ class FancyTimber : JavaPlugin(), Listener {
 
         if (foliageCount == 0) return null
 
-        return TreeScanResult(treeBlocks, baseBlock)
+        return TreeScanResult(treeBlocks, baseBlock, vines)
     }
 
     private fun isTrunk(type: Material): Boolean {
@@ -334,7 +364,9 @@ class FancyTimber : JavaPlugin(), Listener {
                 type == Material.WARPED_WART_BLOCK ||
                 type == Material.SHROOMLIGHT ||
                 type == Material.BROWN_MUSHROOM_BLOCK ||
-                type == Material.RED_MUSHROOM_BLOCK
+                type == Material.RED_MUSHROOM_BLOCK ||
+                type == Material.MANGROVE_PROPAGULE || // Includes Propagule to be processed as falling foliage
+                type == Material.MOSS_CARPET            // Includes Moss Carpet to be processed as falling foliage
     }
 
     private fun isNaturalEnvironment(type: Material): Boolean {
@@ -352,6 +384,7 @@ class FancyTimber : JavaPlugin(), Listener {
 
             Material.GRASS_BLOCK, Material.PODZOL, Material.MYCELIUM,
             Material.MUD, Material.MUDDY_MANGROVE_ROOTS, Material.MANGROVE_ROOTS,
+            Material.MANGROVE_PROPAGULE,
             Material.SNOW, Material.SNOW_BLOCK, Material.POWDER_SNOW,
             Material.WATER, Material.LAVA, Material.SEAGRASS, Material.KELP, Material.KELP_PLANT,
 
@@ -375,6 +408,7 @@ class FancyTimber : JavaPlugin(), Listener {
 
     private data class TreeScanResult(
         val blocks: List<Block>,
-        val baseBlock: Block
+        val baseBlock: Block,
+        val vines: Set<Block>
     )
 }
