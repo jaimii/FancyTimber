@@ -177,33 +177,39 @@ class FancyTimber : JavaPlugin(), Listener {
                         newLocations.add(newLoc)
 
                         if (tick > 5 && info.offset.lengthSquared() > 0.5f) {
-                            // "Make the leaves avoid collision checks, and only the logs have collision when animation is executed"
-                            // If block is foliage (isTrunk == false), it intrinsically entirely ignores the collision checks below!
                             if (info.isTrunk) {
-                                val blockType = newLoc.block.type
+                                val fallingType = info.display.block.material
+                                val isFallingRoot = fallingType == Material.MANGROVE_ROOTS || fallingType == Material.MUDDY_MANGROVE_ROOTS
 
-                                val isVine = blockType == Material.VINE || blockType.name.endsWith("VINES") || blockType.name.endsWith("VINES_PLANT")
-                                val isPropagule = blockType == Material.MANGROVE_PROPAGULE
-                                val isMossCarpet = blockType == Material.MOSS_CARPET
+                                // FIX: Bypass collision for roots and the bottom 2 layers of the trunk.
+                                // This prevents 2x2 trees (Jungle/Dark Oak) and wide Mangrove roots from instantly
+                                // breaking the animation when their off-center base blocks rotate down into the dirt.
+                                if (!isFallingRoot && info.offset.y >= 2.0f) {
+                                    val blockType = newLoc.block.type
 
-                                // "Make trees avoid vines, propagule, and moss carpet collision checks, have the animated tree go through them"
-                                val shouldIgnore = isFoliage(blockType) || isVine || isPropagule || isMossCarpet
+                                    val isVine = blockType == Material.VINE || blockType.name.endsWith("VINES") || blockType.name.endsWith("VINES_PLANT")
+                                    val isPropagule = blockType == Material.MANGROVE_PROPAGULE
+                                    val isMossCarpet = blockType == Material.MOSS_CARPET
+                                    val isCocoa = blockType == Material.COCOA // Add Cocoa to prevent collision with hanging beans
 
-                                if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
-                                    collided = true
-                                }
+                                    val shouldIgnore = isFoliage(blockType) || isVine || isPropagule || isMossCarpet || isCocoa
 
-                                val nearbyEntities = newLoc.world.getNearbyEntities(newLoc, 0.5, 0.5, 0.5)
-                                for (entity in nearbyEntities) {
-                                    if (entity is LivingEntity && entity !is ArmorStand) {
-                                        if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
-                                            continue
-                                        }
-                                        if (entity == player && tick < 12) {
-                                            continue
-                                        }
-                                        entity.damage(10.0, damageSource)
+                                    if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
                                         collided = true
+                                    }
+
+                                    val nearbyEntities = newLoc.world.getNearbyEntities(newLoc, 0.5, 0.5, 0.5)
+                                    for (entity in nearbyEntities) {
+                                        if (entity is LivingEntity && entity !is ArmorStand) {
+                                            if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
+                                                continue
+                                            }
+                                            if (entity == player && tick < 12) {
+                                                continue
+                                            }
+                                            entity.damage(10.0, damageSource)
+                                            collided = true
+                                        }
                                     }
                                 }
                             }
@@ -376,7 +382,8 @@ class FancyTimber : JavaPlugin(), Listener {
                 type == Material.BROWN_MUSHROOM_BLOCK ||
                 type == Material.RED_MUSHROOM_BLOCK ||
                 type == Material.MANGROVE_PROPAGULE || // Includes Propagule to be processed as falling foliage
-                type == Material.MOSS_CARPET            // Includes Moss Carpet to be processed as falling foliage
+                type == Material.MOSS_CARPET ||        // Includes Moss Carpet to be processed as falling foliage
+                type == Material.COCOA                 // Cocoa beans perfectly drop from jungle trees now
     }
 
     private fun isNaturalEnvironment(type: Material): Boolean {
@@ -394,7 +401,8 @@ class FancyTimber : JavaPlugin(), Listener {
 
             Material.GRASS_BLOCK, Material.PODZOL, Material.MYCELIUM,
             Material.MUD, Material.MUDDY_MANGROVE_ROOTS, Material.MANGROVE_ROOTS,
-            Material.MANGROVE_PROPAGULE,
+            Material.MANGROVE_PROPAGULE, Material.COCOA, Material.BAMBOO,
+
             Material.SNOW, Material.SNOW_BLOCK, Material.POWDER_SNOW,
             Material.WATER, Material.LAVA, Material.SEAGRASS, Material.KELP, Material.KELP_PLANT,
 
