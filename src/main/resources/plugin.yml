@@ -1,4 +1,4 @@
-name: FancyTrees
+name: FancyTimber
 version: '1.0'
 main: project.kompass.fancyTimber.FancyTimber
 api-version: '1.21'
