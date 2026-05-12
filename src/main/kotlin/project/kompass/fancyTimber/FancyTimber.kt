@@ -35,7 +35,7 @@ import kotlin.math.max
 
 class FancyTimber : JavaPlugin(), Listener {
 
-    // ProtocolLib Improvement: Uses custom lightweight BlockPos instead of heavy Bukkit Location
+    // ProtocolLib
     private data class BlockPos(val worldId: UUID, val x: Int, val y: Int, val z: Int)
 
     private val silentBlocks = ConcurrentHashMap.newKeySet<BlockPos>()
@@ -67,7 +67,7 @@ class FancyTimber : JavaPlugin(), Listener {
             }
         )
     }
-
+    // Event value assigning:
     @EventHandler(ignoreCancelled = true)
     fun onBlockBreak(event: BlockBreakEvent) {
         val startBlock = event.block
@@ -76,8 +76,7 @@ class FancyTimber : JavaPlugin(), Listener {
 
         if (!isTrunk(startBlock.type)) return
 
-        // 1.21.11 Mounts Of Mayhem update: Uses registry tags instead of string checking.
-        // Also naturally rejects 1.21.11 Spears since they are not formally tagged as axes.
+        // Requirements for timber execution:
         if (tool.type == Material.AIR || !Tag.ITEMS_AXES.isTagged(tool.type)) return
         if (!player.isSneaking) return
 
@@ -89,15 +88,15 @@ class FancyTimber : JavaPlugin(), Listener {
         event.isDropItems = false
         val isCreative = player.gameMode == GameMode.CREATIVE
 
-        // Break attached vines directly. They will naturally drop items and disappear without spawning displays.
+        // (Break attached vines directly.)
         for (vine in vines) {
             val vPos = BlockPos(vine.world.uid, vine.x, vine.y, vine.z)
             silentBlocks.add(vPos)
             vine.breakNaturally(tool)
         }
-
+        // Hinge for larger tree types:
         val hinge = baseBlock.location.add(0.5, 0.0, 0.5)
-
+        // Animation Handler:
         var direction = player.location.direction.setY(0.0)
         if (direction.lengthSquared() < 1e-5) {
             direction = Vector(1.0, 0.0, 0.0)
@@ -110,6 +109,7 @@ class FancyTimber : JavaPlugin(), Listener {
         val axisY = axisDir.y.toFloat()
         val axisZ = axisDir.z.toFloat()
 
+        // Blocks to display entities:
         val displaysAndDrops = mutableListOf<BlockDataInfo>()
         var logsBroken = 0
 
@@ -130,7 +130,6 @@ class FancyTimber : JavaPlugin(), Listener {
             val display = b.world.spawn(b.location.add(0.5, 0.0, 0.5), BlockDisplay::class.java) { entity ->
                 entity.block = b.blockData
                 entity.teleportDuration = 2
-                // Improvement: Avoid saving temporary visual entities in case the server shuts down or restarts
                 entity.isPersistent = false
             }
 
@@ -138,9 +137,8 @@ class FancyTimber : JavaPlugin(), Listener {
             b.setType(Material.AIR, false)
         }
 
-        // Apply corresponding durability damage relative to the amount of broken logs
+        // Durability Calculator: (Per Block)
         if (logsBroken > 1 && !isCreative) {
-            // Subtract 1 because the natively fired BlockBreakEvent handles the durability damage for the initial block broken
             player.damageItemStack(org.bukkit.inventory.EquipmentSlot.HAND, logsBroken - 1)
         }
 
@@ -181,18 +179,16 @@ class FancyTimber : JavaPlugin(), Listener {
                                 val fallingType = info.display.block.material
                                 val isFallingRoot = fallingType == Material.MANGROVE_ROOTS || fallingType == Material.MUDDY_MANGROVE_ROOTS
 
-                                // FIX: Bypass collision for roots and the bottom 2 layers of the trunk.
-                                // This prevents 2x2 trees (Jungle/Dark Oak) and wide Mangrove roots from instantly
-                                // breaking the animation when their off-center base blocks rotate down into the dirt.
+                                // (Bypass collision for roots and the bottom 2 layers of the trunk.)
                                 if (!isFallingRoot && info.offset.y >= 2.0f) {
                                     val blockType = newLoc.block.type
 
-                                    val isVine = blockType == Material.VINE || blockType.name.endsWith("VINES") || blockType.name.endsWith("VINES_PLANT")
+                                    // Ignore these in colision check:
                                     val isPropagule = blockType == Material.MANGROVE_PROPAGULE
                                     val isMossCarpet = blockType == Material.MOSS_CARPET
-                                    val isCocoa = blockType == Material.COCOA // Add Cocoa to prevent collision with hanging beans
+                                    val isCocoa = blockType == Material.COCOA
 
-                                    val shouldIgnore = isFoliage(blockType) || isVine || isPropagule || isMossCarpet || isCocoa
+                                    val shouldIgnore = isFoliage(blockType) || isVine(blockType) || isPropagule || isMossCarpet || isCocoa
 
                                     if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
                                         collided = true
@@ -247,7 +243,7 @@ class FancyTimber : JavaPlugin(), Listener {
             vines.forEach { silentBlocks.remove(BlockPos(it.world.uid, it.x, it.y, it.z)) }
         }, 10L)
     }
-
+    // The end of the tree animation:
     private fun finishFall(
         infos: List<BlockDataInfo>,
         hinge: Location,
@@ -272,8 +268,10 @@ class FancyTimber : JavaPlugin(), Listener {
             }
         }
     }
-
+    // Tree Scanner: (Check for tree type adjacent to the tree.)
     private fun detectTree(startBlock: Block): TreeScanResult? {
+        val startFamily = getTreeFamily(startBlock.type) // Obtain the initial tree grouping type
+
         val trunks = mutableSetOf<Block>()
         val trunkQueue = ArrayDeque<Block>()
         trunkQueue.add(startBlock)
@@ -293,12 +291,16 @@ class FancyTimber : JavaPlugin(), Listener {
                         if (!isNaturalEnvironment(adj.type)) return null
 
                         if (adj !in trunks && isTrunk(adj.type)) {
-                            val hDist = max(abs(adj.x - startBlock.x), abs(adj.z - startBlock.z))
-                            if (hDist <= 12 && (adj.y - startBlock.y) in -12..50) {
-                                trunks.add(adj)
-                                trunkQueue.add(adj)
-                                if (adj.y < baseBlock.y) {
-                                    baseBlock = adj
+                            val adjFamily = getTreeFamily(adj.type)
+
+                            if (adjFamily == startFamily || adjFamily == "SHARED") {
+                                val hDist = max(abs(adj.x - startBlock.x), abs(adj.z - startBlock.z))
+                                if (hDist <= 12 && (adj.y - startBlock.y) in -12..50) {
+                                    trunks.add(adj)
+                                    trunkQueue.add(adj)
+                                    if (adj.y < baseBlock.y) {
+                                        baseBlock = adj
+                                    }
                                 }
                             }
                         }
@@ -335,25 +337,30 @@ class FancyTimber : JavaPlugin(), Listener {
                         if (adj !in trunks && adj !in foliage && adj !in vines) {
                             val type = adj.type
 
-                            // Handle vines separating from falling animation
-                            if (type == Material.VINE) {
+                            // (Handle vines separating from falling animation.)
+                            if (isVine(type)) {
                                 vines.add(adj)
                                 foliageQueue.add(Pair(adj, dist + 1))
                             } else if (isFoliage(type)) {
-                                val blockData = adj.blockData
-                                var belongsToTree = true
+                                val adjFamily = getTreeFamily(type)
 
-                                if (blockData is Leaves) {
-                                    if (!blockData.isPersistent && blockData.distance < dist + 1) {
-                                        belongsToTree = false
+                                // (Make sure adjacent foliage matches the host tree's type)
+                                if (adjFamily == startFamily || adjFamily == "SHARED") {
+                                    val blockData = adj.blockData
+                                    var belongsToTree = true
+
+                                    if (blockData is Leaves) {
+                                        if (!blockData.isPersistent && blockData.distance < dist + 1) {
+                                            belongsToTree = false
+                                        }
                                     }
-                                }
 
-                                if (belongsToTree) {
-                                    foliage.add(adj)
-                                    foliageQueue.add(Pair(adj, dist + 1))
-                                    treeBlocks.add(adj)
-                                    foliageCount++
+                                    if (belongsToTree) {
+                                        foliage.add(adj)
+                                        foliageQueue.add(Pair(adj, dist + 1))
+                                        treeBlocks.add(adj)
+                                        foliageCount++
+                                    }
                                 }
                             }
                         }
@@ -365,6 +372,30 @@ class FancyTimber : JavaPlugin(), Listener {
         if (foliageCount == 0) return null
 
         return TreeScanResult(treeBlocks, baseBlock, vines)
+    }
+    // Helpers:
+    // Tree Family: (Tree types based on trunk block.)
+    private fun getTreeFamily(type: Material): String {
+        val name = type.name
+        return when {
+            name.contains("DARK_OAK") -> "DARK_OAK"
+            name.contains("PALE_OAK") -> "PALE_OAK"
+            name.contains("OAK") || name.contains("AZALEA") -> "OAK"
+            name.contains("SPRUCE") -> "SPRUCE"
+            name.contains("BIRCH") -> "BIRCH"
+            name.contains("JUNGLE") || type == Material.COCOA -> "JUNGLE"
+            name.contains("ACACIA") -> "ACACIA"
+            name.contains("MANGROVE") -> "MANGROVE"
+            name.contains("CHERRY") -> "CHERRY"
+            name.contains("CRIMSON") || type == Material.NETHER_WART_BLOCK -> "CRIMSON"
+            name.contains("WARPED") -> "WARPED"
+            name.contains("MUSHROOM") -> "MUSHROOM"
+            else -> "SHARED" // Vine, Shroomlight, Moss Carpet...
+        }
+    }
+
+    private fun isVine(type: Material): Boolean {
+        return type == Material.VINE || type.name.endsWith("VINES") || type.name.endsWith("VINES_PLANT")
     }
 
     private fun isTrunk(type: Material): Boolean {
@@ -381,14 +412,14 @@ class FancyTimber : JavaPlugin(), Listener {
                 type == Material.SHROOMLIGHT ||
                 type == Material.BROWN_MUSHROOM_BLOCK ||
                 type == Material.RED_MUSHROOM_BLOCK ||
-                type == Material.MANGROVE_PROPAGULE || // Includes Propagule to be processed as falling foliage
-                type == Material.MOSS_CARPET ||        // Includes Moss Carpet to be processed as falling foliage
-                type == Material.COCOA                 // Cocoa beans perfectly drop from jungle trees now
+                type == Material.MANGROVE_PROPAGULE ||
+                type == Material.MOSS_CARPET ||
+                type == Material.COCOA
     }
 
     private fun isNaturalEnvironment(type: Material): Boolean {
         if (type.isAir) return true
-        if (isTrunk(type) || isFoliage(type)) return true
+        if (isTrunk(type) || isFoliage(type) || isVine(type)) return true
         if (Tag.DIRT.isTagged(type) || Tag.SAND.isTagged(type)) return true
         if (Tag.FLOWERS.isTagged(type) || Tag.BASE_STONE_OVERWORLD.isTagged(type)) return true
         if (Tag.ICE.isTagged(type) || Tag.SNOW.isTagged(type)) return true
@@ -397,7 +428,7 @@ class FancyTimber : JavaPlugin(), Listener {
             Material.MOSS_BLOCK, Material.MOSS_CARPET, Material.PINK_PETALS,
 
             Material.SHORT_GRASS, Material.TALL_GRASS, Material.FERN, Material.LARGE_FERN,
-            Material.DEAD_BUSH, Material.VINE, Material.GLOW_LICHEN, Material.HANGING_ROOTS,
+            Material.DEAD_BUSH, Material.GLOW_LICHEN, Material.HANGING_ROOTS,
 
             Material.GRASS_BLOCK, Material.PODZOL, Material.MYCELIUM,
             Material.MUD, Material.MUDDY_MANGROVE_ROOTS, Material.MANGROVE_ROOTS,
@@ -407,8 +438,7 @@ class FancyTimber : JavaPlugin(), Listener {
             Material.WATER, Material.LAVA, Material.SEAGRASS, Material.KELP, Material.KELP_PLANT,
 
             Material.BROWN_MUSHROOM, Material.RED_MUSHROOM, Material.CRIMSON_FUNGUS, Material.WARPED_FUNGUS,
-            Material.CRIMSON_ROOTS, Material.WARPED_ROOTS, Material.NETHER_SPROUTS, Material.WEEPING_VINES,
-            Material.WEEPING_VINES_PLANT, Material.TWISTING_VINES, Material.TWISTING_VINES_PLANT,
+            Material.CRIMSON_ROOTS, Material.WARPED_ROOTS, Material.NETHER_SPROUTS,
 
             Material.NETHERRACK, Material.SOUL_SAND, Material.SOUL_SOIL, Material.CRIMSON_NYLIUM, Material.WARPED_NYLIUM,
             Material.MAGMA_BLOCK, Material.BONE_BLOCK -> true
