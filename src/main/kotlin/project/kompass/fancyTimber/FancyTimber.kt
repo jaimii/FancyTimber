@@ -5,9 +5,11 @@ import com.comphenix.protocol.ProtocolLibrary
 import com.comphenix.protocol.events.ListenerPriority
 import com.comphenix.protocol.events.PacketAdapter
 import com.comphenix.protocol.events.PacketEvent
+import org.bukkit.Color
 import org.bukkit.GameMode
 import org.bukkit.Location
 import org.bukkit.Material
+import org.bukkit.Particle
 import org.bukkit.Sound
 import org.bukkit.Tag
 import org.bukkit.block.Block
@@ -40,6 +42,19 @@ class FancyTimber : JavaPlugin(), Listener {
 
     private val silentBlocks = ConcurrentHashMap.newKeySet<BlockPos>()
 
+    // Dynamically resolved particles to prevent compatibility crashes on older 1.21 builds
+    private val tintedLeavesParticle: Particle? = try {
+        Particle.valueOf("TINTED_LEAVES")
+    } catch (e: IllegalArgumentException) {
+        null
+    }
+
+    private val paleOakLeavesParticle: Particle? = try {
+        Particle.valueOf("PALE_OAK_LEAVES")
+    } catch (e: IllegalArgumentException) {
+        null
+    }
+
     override fun onEnable() {
         server.pluginManager.registerEvents(this, this)
         registerProtocolLibInterceptor()
@@ -67,6 +82,7 @@ class FancyTimber : JavaPlugin(), Listener {
             }
         )
     }
+
     // Event value assigning:
     @EventHandler(ignoreCancelled = true)
     fun onBlockBreak(event: BlockBreakEvent) {
@@ -133,7 +149,7 @@ class FancyTimber : JavaPlugin(), Listener {
                 entity.isPersistent = false
             }
 
-            displaysAndDrops.add(BlockDataInfo(offset, display, b.getDrops(tool, player), isTrunk(b.type)))
+            displaysAndDrops.add(BlockDataInfo(offset, display, b.getDrops(tool, player), b.blockData, isTrunk(b.type)))
             b.setType(Material.AIR, false)
         }
 
@@ -183,7 +199,7 @@ class FancyTimber : JavaPlugin(), Listener {
                                 if (!isFallingRoot && info.offset.y >= 2.0f) {
                                     val blockType = newLoc.block.type
 
-                                    // Ignore these in colision check:
+                                    // Ignore these in collision check:
                                     val isPropagule = blockType == Material.MANGROVE_PROPAGULE
                                     val isMossCarpet = blockType == Material.MOSS_CARPET
                                     val isCocoa = blockType == Material.COCOA
@@ -243,6 +259,7 @@ class FancyTimber : JavaPlugin(), Listener {
             vines.forEach { silentBlocks.remove(BlockPos(it.world.uid, it.x, it.y, it.z)) }
         }, 10L)
     }
+
     // The end of the tree animation:
     private fun finishFall(
         infos: List<BlockDataInfo>,
@@ -259,6 +276,15 @@ class FancyTimber : JavaPlugin(), Listener {
             val loc = info.display.location
             info.display.remove()
 
+            val material = info.blockData.material
+
+            if (isFoliage(material)) {
+                spawnFoliageParticles(world, loc, info.blockData)
+            } else if (isTrunk(material)) {
+                // Break particles for wood logs
+                world.spawnParticle(Particle.BLOCK, loc, 5, 0.3, 0.3, 0.3, 0.0, info.blockData)
+            }
+
             if (!isCreative) {
                 for (drop in info.drops) {
                     world.dropItem(loc, drop) { item ->
@@ -268,6 +294,57 @@ class FancyTimber : JavaPlugin(), Listener {
             }
         }
     }
+
+    // Particle Spawner Helper
+    private fun spawnFoliageParticles(world: org.bukkit.World, loc: Location, blockData: org.bukkit.block.data.BlockData) {
+        val material = blockData.material
+        val family = getTreeFamily(material)
+
+        if (family == "CHERRY") {
+            world.spawnParticle(Particle.CHERRY_LEAVES, loc, 8, 0.4, 0.4, 0.4, 0.0)
+            return
+        }
+
+        if (family == "PALE_OAK" && paleOakLeavesParticle != null) {
+            world.spawnParticle(paleOakLeavesParticle, loc, 8, 0.4, 0.4, 0.4, 0.0)
+            return
+        }
+
+        if (tintedLeavesParticle != null) {
+            val color = getFoliageColor(family, material)
+            world.spawnParticle(tintedLeavesParticle, loc, 8, 0.4, 0.4, 0.4, 0.0, color)
+            return
+        }
+
+        // Fallback for versions without TINTED_LEAVES: block breaking particles
+        world.spawnParticle(Particle.BLOCK, loc, 8, 0.4, 0.4, 0.4, 0.0, blockData)
+    }
+
+    // Color mapper for various tree foliage types
+    private fun getFoliageColor(family: String, material: Material): Color {
+        return when (family) {
+            "OAK" -> {
+                if (material.name.contains("AZALEA")) Color.fromRGB(111, 149, 53)
+                else Color.fromRGB(60, 110, 40)
+            }
+            "SPRUCE" -> Color.fromRGB(97, 153, 114)
+            "BIRCH" -> Color.fromRGB(128, 164, 114)
+            "JUNGLE" -> Color.fromRGB(48, 114, 21)
+            "ACACIA" -> Color.fromRGB(141, 178, 122)
+            "DARK_OAK" -> Color.fromRGB(42, 68, 20)
+            "PALE_OAK" -> Color.fromRGB(180, 195, 175)
+            "CHERRY" -> Color.fromRGB(242, 182, 203)
+            "MANGROVE" -> Color.fromRGB(74, 107, 44)
+            "CRIMSON" -> Color.fromRGB(152, 16, 16)
+            "WARPED" -> Color.fromRGB(21, 124, 124)
+            "MUSHROOM" -> {
+                if (material == Material.RED_MUSHROOM_BLOCK) Color.fromRGB(195, 42, 42)
+                else Color.fromRGB(142, 105, 85)
+            }
+            else -> Color.fromRGB(60, 110, 40)
+        }
+    }
+
     // Tree Scanner: (Check for tree type adjacent to the tree.)
     private fun detectTree(startBlock: Block): TreeScanResult? {
         val startFamily = getTreeFamily(startBlock.type) // Obtain the initial tree grouping type
@@ -373,6 +450,7 @@ class FancyTimber : JavaPlugin(), Listener {
 
         return TreeScanResult(treeBlocks, baseBlock, vines)
     }
+
     // Helpers:
     // Tree Family: (Tree types based on trunk block.)
     private fun getTreeFamily(type: Material): String {
@@ -451,6 +529,7 @@ class FancyTimber : JavaPlugin(), Listener {
         val offset: Vector3f,
         val display: BlockDisplay,
         val drops: Collection<ItemStack>,
+        val blockData: org.bukkit.block.data.BlockData,
         val isTrunk: Boolean
     )
 
