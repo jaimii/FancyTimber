@@ -38,13 +38,11 @@ class TreeFallAnimation(
     private var verticalDisplacement = 0.0
     private val gravityAcceleration = 0.015
 
-    // TPS OPTIMIZATION: Pre-allocate reusable coordinate vectors and locations
     private val tempRotated = Vector3f()
     private val cachedLocations = Array(displaysAndDrops.size) {
         Location(hinge.world, 0.0, 0.0, 0.0)
     }
 
-    // Stable, position-derived fake entity ID for stump visual cracks
     private val stumpFakeEntityId = 999120 + hinge.blockX + hinge.blockZ
 
     override fun run() {
@@ -60,15 +58,19 @@ class TreeFallAnimation(
                 hinge.world.playSound(hinge, Sound.BLOCK_WOOD_STEP, 0.6f, 0.5f)
             }
 
-            // Progressively apply cracking stages to the base stump based on fall angle
             val crackStage = (ease * 9).toInt().coerceIn(0, 9)
             sendStumpCracks(crackStage)
 
-            if (tick > 10) {
-                val currentGravity = gravityAcceleration * ease
+            // REFINEMENT: Gravity only activates once rotation is halfway down (progress >= 0.5)
+            if (progress >= 0.5f) {
+                val gravityProgress = (progress - 0.5f) * 2.0f // Scales 0.5 -> 1.0 to a 0.0 -> 1.0 curve
+                val currentGravity = gravityAcceleration * gravityProgress
                 verticalVelocity += currentGravity
                 verticalDisplacement += verticalVelocity
             }
+
+            // Heightmap cache to prevent duplicate ground queries during this tick
+            val groundCache = HashMap<Long, Double>()
 
             for (i in displaysAndDrops.indices) {
                 val info = displaysAndDrops[i]
@@ -77,8 +79,18 @@ class TreeFallAnimation(
 
                 val newLoc = cachedLocations[i]
                 newLoc.x = hinge.x + tempRotated.x
-                newLoc.y = hinge.y + tempRotated.y - verticalDisplacement
                 newLoc.z = hinge.z + tempRotated.z
+
+                val rawY = hinge.y + tempRotated.y - verticalDisplacement
+
+                // REFINEMENT: Cache column height and clamp the block's Y position to prevent ground clipping
+                val chunkKey = (newLoc.blockX.toLong() shl 32) or (newLoc.blockZ.toLong() and 0xFFFFFFFFL)
+                val groundY = groundCache.getOrPut(chunkKey) {
+                    newLoc.world.getHighestBlockYAt(newLoc.blockX, newLoc.blockZ).toDouble()
+                }
+
+                // If calculated coordinate dips below ground level, snap it to ground level (prevents clipping)
+                newLoc.y = if (rawY < groundY) groundY else rawY
 
                 if (tick > 5 && info.offset.lengthSquared() > 0.5f) {
                     if (info.isTrunk) {
@@ -155,7 +167,6 @@ class TreeFallAnimation(
     private fun finishFall() {
         val world = hinge.world
 
-        // Clean up stump cracks completely upon fall completion
         sendStumpCracks(-1)
 
         world.playSound(hinge, Sound.BLOCK_WOOD_BREAK, 1.2f, 0.6f)

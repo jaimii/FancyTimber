@@ -35,13 +35,14 @@ object TreeScanner {
                         val adjY = curY + dy
                         val adjZ = curZ + dz
 
-                        // TPS OPTIMIZATION: Prevent synchronous chunk loading
                         if (!world.isChunkLoaded(adjX shr 4, adjZ shr 4)) continue
 
-                        // TPS OPTIMIZATION: Check type first to avoid instantiating heavy Block wrappers
                         val adjType = world.getType(adjX, adjY, adjZ)
 
                         if (!TimberUtils.isNaturalEnvironment(adjType)) return null
+
+                        // EXCLUSION GUARD: Completely ignore ground cover during adjacent lookups
+                        if (TimberUtils.isExcludedFromScan(adjType)) continue
 
                         if (TimberUtils.isTrunk(adjType)) {
                             val adjBlock = world.getBlockAt(adjX, adjY, adjZ)
@@ -77,7 +78,7 @@ object TreeScanner {
 
         var foliageCount = 0
 
-        // 2. Trace the foliage and attachments (vines, etc.)
+        // 2. Trace the foliage and attachments
         while (foliageQueue.isNotEmpty() && treeBlocks.size < 2500) {
             val (current, dist) = foliageQueue.removeFirst()
             val curX = current.x
@@ -94,13 +95,14 @@ object TreeScanner {
                         val adjY = curY + dy
                         val adjZ = curZ + dz
 
-                        // TPS OPTIMIZATION: Prevent synchronous chunk loading
                         if (!world.isChunkLoaded(adjX shr 4, adjZ shr 4)) continue
 
-                        // TPS OPTIMIZATION: Fast check using material before wrapper creation
                         val adjType = world.getType(adjX, adjY, adjZ)
 
                         if (!TimberUtils.isNaturalEnvironment(adjType)) return null
+
+                        // EXCLUSION GUARD: Completely ignore ground cover during adjacent lookups
+                        if (TimberUtils.isExcludedFromScan(adjType)) continue
 
                         if (TimberUtils.isVine(adjType)) {
                             val adjBlock = world.getBlockAt(adjX, adjY, adjZ)

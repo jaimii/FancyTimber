@@ -10,7 +10,19 @@ import org.bukkit.block.data.BlockData
 
 object TimberUtils {
 
-    // Dynamically resolved particles to prevent compatibility crashes on older 1.21 builds
+    // Dynamically resolved blocks & particles to prevent compatibility crashes across 1.21 sub-versions
+    val leafLitterMaterial: Material? = try {
+        Material.valueOf("LEAF_LITTER")
+    } catch (e: Exception) {
+        null
+    }
+
+    val wildflowersMaterial: Material? = try {
+        Material.valueOf("WILDFLOWERS")
+    } catch (e: Exception) {
+        null
+    }
+
     val tintedLeavesParticle: Particle? = try {
         Particle.valueOf("TINTED_LEAVES")
     } catch (e: IllegalArgumentException) {
@@ -38,7 +50,7 @@ object TimberUtils {
             name.contains("CRIMSON") || type == Material.NETHER_WART_BLOCK -> "CRIMSON"
             name.contains("WARPED") -> "WARPED"
             name.contains("MUSHROOM") -> "MUSHROOM"
-            else -> "SHARED" // Vine, Shroomlight, Moss Carpet, etc.
+            else -> "SHARED"
         }
     }
 
@@ -53,6 +65,10 @@ object TimberUtils {
                 type == Material.MUSHROOM_STEM
     }
 
+    /**
+     * Identifies TREE CANOPY foliage. These blocks are fully included in the scan,
+     * turned into falling display blocks, and drop items at the end.
+     */
     fun isFoliage(type: Material): Boolean {
         return Tag.LEAVES.isTagged(type) ||
                 type == Material.NETHER_WART_BLOCK ||
@@ -61,8 +77,35 @@ object TimberUtils {
                 type == Material.BROWN_MUSHROOM_BLOCK ||
                 type == Material.RED_MUSHROOM_BLOCK ||
                 type == Material.MANGROVE_PROPAGULE ||
-                type == Material.MOSS_CARPET ||
                 type == Material.COCOA
+    }
+
+    /**
+     * Identifies GROUND foliage and ground cover. These blocks are completely ignored
+     * in pathfinding to avoid accidental inclusion or tree destruction.
+     */
+    fun isExcludedFromScan(type: Material): Boolean {
+        if (leafLitterMaterial != null && type == leafLitterMaterial) return true
+        if (wildflowersMaterial != null && type == wildflowersMaterial) return true
+
+        // Check standard Bukkit registry tags
+        if (Tag.FLOWERS.isTagged(type)) return true
+        if (Tag.SAPLINGS.isTagged(type)) return true
+
+        // 2-tall flowers / double plant safety checks
+        val name = type.name
+        if (name == "PITCHER_PLANT" || name == "SUNFLOWER" || name == "PEONY" || name == "LILAC" || name == "ROSE_BUSH") return true
+
+        return type == Material.SHORT_GRASS ||
+                type == Material.TALL_GRASS ||
+                type == Material.FERN ||
+                type == Material.LARGE_FERN ||
+                type == Material.PINK_PETALS ||
+                type == Material.DEAD_BUSH ||
+                type == Material.MOSS_CARPET ||
+                type.name.contains("PALE_MOSS_CARPET") ||
+                type == Material.GLOW_LICHEN ||
+                type == Material.HANGING_ROOTS
     }
 
     fun isNaturalEnvironment(type: Material): Boolean {
@@ -71,6 +114,7 @@ object TimberUtils {
         if (Tag.DIRT.isTagged(type) || Tag.SAND.isTagged(type)) return true
         if (Tag.FLOWERS.isTagged(type) || Tag.BASE_STONE_OVERWORLD.isTagged(type)) return true
         if (Tag.ICE.isTagged(type) || Tag.SNOW.isTagged(type)) return true
+        if (Tag.SAPLINGS.isTagged(type)) return true
 
         return when (type) {
             Material.MOSS_BLOCK, Material.MOSS_CARPET, Material.PINK_PETALS,
@@ -109,7 +153,6 @@ object TimberUtils {
             return
         }
 
-        // Fallback: Use raw block breaking particles
         world.spawnParticle(Particle.BLOCK, loc, 8, 0.4, 0.4, 0.4, 0.0, blockData)
     }
 
