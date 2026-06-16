@@ -1,10 +1,6 @@
 package project.kompass.fancyTimber.animation
 
-import org.bukkit.GameMode
-import org.bukkit.Location
-import org.bukkit.Material
-import org.bukkit.Particle
-import org.bukkit.Sound
+import org.bukkit.*
 import org.bukkit.damage.DamageSource
 import org.bukkit.damage.DamageType
 import org.bukkit.entity.ArmorStand
@@ -45,6 +41,10 @@ class TreeFallAnimation(
 
     private val stumpFakeEntityId = 999120 + hinge.blockX + hinge.blockZ
 
+    // Dynamic measurements to target only log segments in the upper half of the tree
+    private val maxOffsetY = displaysAndDrops.maxOfOrNull { it.offset.y } ?: 0f
+    private val upperHalfThreshold = maxOffsetY / 2.0f
+
     override fun run() {
         try {
             val progress = (tick / referenceTicks).coerceAtMost(1.0f)
@@ -61,15 +61,15 @@ class TreeFallAnimation(
             val crackStage = (ease * 9).toInt().coerceIn(0, 9)
             sendStumpCracks(crackStage)
 
-            // REFINEMENT: Gravity only activates once rotation is halfway down (progress >= 0.5)
             if (progress >= 0.5f) {
-                val gravityProgress = (progress - 0.5f) * 2.0f // Scales 0.5 -> 1.0 to a 0.0 -> 1.0 curve
+                val gravityProgress = (progress - 0.5f) * 2.0f
                 val currentGravity = gravityAcceleration * gravityProgress
                 verticalVelocity += currentGravity
                 verticalDisplacement += verticalVelocity
             }
 
-            // Heightmap cache to prevent duplicate ground queries during this tick
+            // PASS 1: Calculate provisional locations and measure ground-penetration (clipping)
+            var maxClipping = 0.0
             val groundCache = HashMap<Long, Double>()
 
             for (i in displaysAndDrops.indices) {
@@ -79,57 +79,59 @@ class TreeFallAnimation(
 
                 val newLoc = cachedLocations[i]
                 newLoc.x = hinge.x + tempRotated.x
+                newLoc.y = hinge.y + tempRotated.y - verticalDisplacement
                 newLoc.z = hinge.z + tempRotated.z
 
-                val rawY = hinge.y + tempRotated.y - verticalDisplacement
-
-                // REFINEMENT: Cache column height and clamp the block's Y position to prevent ground clipping
+                // Cache column heights using optimized coordinates key
                 val chunkKey = (newLoc.blockX.toLong() shl 32) or (newLoc.blockZ.toLong() and 0xFFFFFFFFL)
                 val groundY = groundCache.getOrPut(chunkKey) {
-                    newLoc.world.getHighestBlockYAt(newLoc.blockX, newLoc.blockZ).toDouble()
+                    getGroundYBelow(newLoc.world, newLoc.blockX, newLoc.y, newLoc.blockZ)
                 }
 
-                // If calculated coordinate dips below ground level, snap it to ground level (prevents clipping)
-                newLoc.y = if (rawY < groundY) groundY else rawY
+                val clipping = groundY - newLoc.y
+                if (clipping > maxClipping) {
+                    maxClipping = clipping
+                }
+            }
 
-                if (tick > 5 && info.offset.lengthSquared() > 0.5f) {
-                    if (info.isTrunk) {
-                        val fallingType = info.display.block.material
-                        val isFallingRoot = fallingType == Material.MANGROVE_ROOTS || fallingType == Material.MUDDY_MANGROVE_ROOTS
+            // PASS 2: Shift all blocks rigidly by the maximum clipping value and run upper-half log collisions
+            for (i in displaysAndDrops.indices) {
+                val info = displaysAndDrops[i]
+                val newLoc = cachedLocations[i]
 
-                        if (!isFallingRoot && info.offset.y >= 2.0f) {
-                            val blockType = newLoc.block.type
+                // Adjust height uniformly so the tree remains connected
+                newLoc.y = newLoc.y + maxClipping
 
-                            val isPropagule = blockType == Material.MANGROVE_PROPAGULE
-                            val isMossCarpet = blockType == Material.MOSS_CARPET
-                            val isCocoa = blockType == Material.COCOA
+                // Collision logic strictly for trunk segments in the upper half of the tree
+                if (tick > 5 && info.isTrunk && info.offset.y >= upperHalfThreshold) {
+                    val blockType = newLoc.block.type
 
-                            val shouldIgnore = TimberUtils.isFoliage(blockType) ||
-                                    TimberUtils.isVine(blockType) ||
-                                    isPropagule || isMossCarpet || isCocoa
+                    val isPropagule = blockType == Material.MANGROVE_PROPAGULE
+                    val isMossCarpet = blockType == Material.MOSS_CARPET
+                    val isCocoa = blockType == Material.COCOA
 
-                            if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
-                                collided = true
+                    val shouldIgnore = TimberUtils.isFoliage(blockType) ||
+                            TimberUtils.isVine(blockType) ||
+                            isPropagule || isMossCarpet || isCocoa
+
+                    if (blockType.isSolid && blockType != Material.AIR && !shouldIgnore) {
+                        collided = true
+                    }
+
+                    val nearbyEntities = newLoc.world.getNearbyEntities(newLoc, 0.5, 0.5, 0.5)
+                    for (entity in nearbyEntities) {
+                        if (entity is LivingEntity && entity !is ArmorStand) {
+                            if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
+                                continue
                             }
-
-                            val nearbyEntities = newLoc.world.getNearbyEntities(newLoc, 0.5, 0.5, 0.5)
-                            for (entity in nearbyEntities) {
-                                if (entity is LivingEntity && entity !is ArmorStand) {
-                                    if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
-                                        continue
-                                    }
-                                    if (entity == player && tick < 12) {
-                                        continue
-                                    }
-                                    entity.damage(10.0, damageSource)
-                                    collided = true
-                                }
+                            if (entity == player && tick < 12) {
+                                continue
                             }
+                            entity.damage(10.0, damageSource)
+                            collided = true
                         }
                     }
                 }
-
-                if (collided) break
             }
 
             if (collided || tick > 150) {
@@ -153,6 +155,33 @@ class TreeFallAnimation(
             finishFall()
             this.cancel()
         }
+    }
+
+    /**
+     * Resolves the exact ground level at the current column (X, Z) while ignoring any overhead
+     * blocks (like adjacent leaves, roof structures, or cliffs above) to prevent layout jumping.
+     */
+    private fun getGroundYBelow(world: World, x: Int, tempY: Double, z: Int): Double {
+        val highestY = world.getHighestBlockYAt(x, z).toDouble()
+        // If the absolute highest block in the column is below the entity's current height,
+        // it is the actual ground. We can use it instantly in O(1) time.
+        if (highestY <= tempY + 1.0) {
+            return highestY
+        }
+
+        // Otherwise, there is an overhead block. We search downwards starting
+        // from the block's theoretical position.
+        var y = (tempY + 1.0).toInt()
+        val minHeight = world.minHeight
+        while (y > minHeight) {
+            val type = world.getType(x, y, z)
+            // Skip non-solid blocks, foliage, and vines so they are ignored during the downward trace
+            if (type.isSolid && type != Material.AIR && !TimberUtils.isFoliage(type) && !TimberUtils.isVine(type)) {
+                return y.toDouble() + 1.0
+            }
+            y--
+        }
+        return minHeight.toDouble()
     }
 
     private fun sendStumpCracks(stage: Int) {

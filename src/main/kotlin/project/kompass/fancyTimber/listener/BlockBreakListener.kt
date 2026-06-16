@@ -29,29 +29,31 @@ class BlockBreakListener(
         val player = event.player
         val tool = player.inventory.itemInMainHand
 
-        if (!TimberUtils.isTrunk(startBlock.type)) return
+        val isAxe = Tag.ITEMS_AXES.isTagged(tool.type) || tool.type.name.endsWith("_AXE")
+        val isTrunk = TimberUtils.isTrunk(startBlock.type)
+        val debugMode = plugin.debugMode // Read runtime debug state from main class
 
-        if (tool.type == Material.AIR || !Tag.ITEMS_AXES.isTagged(tool.type)) return
+        // Diagnostic requirement check output
+        if (debugMode && isAxe && startBlock.type.name.contains("LOG")) {
+            player.sendMessage("§e[FancyTimber Debug] §fChop detected!")
+            player.sendMessage("§e[FancyTimber Debug] §f- Tool: §6${tool.type.name}§f (Is Axe: §a$isAxe§f)")
+            player.sendMessage("§e[FancyTimber Debug] §f- Block: §6${startBlock.type.name}§f (Is Trunk: §a$isTrunk§f)")
+            player.sendMessage("§e[FancyTimber Debug] §f- Sneaking: §a${player.isSneaking}§f")
+        }
+
+        if (!isTrunk) return
+        if (tool.type == Material.AIR || !isAxe) return
         if (!player.isSneaking) return
 
-        val scanResult = TreeScanner.detectTree(startBlock) ?: return
+        val debugReceiver = if (debugMode) player else null
+        val scanResult = TreeScanner.detectTree(startBlock, debugReceiver) ?: return
         val treeBlocks = scanResult.blocks
         val baseBlock = scanResult.baseBlock
-        val vines = scanResult.vines
 
         event.isDropItems = false
         val isCreative = player.gameMode == GameMode.CREATIVE
 
-        // Track and reuse BlockPos objects instead of generating duplicates later
-        val silentBlockList = ArrayList<BlockPos>(treeBlocks.size + vines.size)
-
-        for (vine in vines) {
-            val vPos = BlockPos.from(vine)
-            silentBlocks.add(vPos)
-            silentBlockList.add(vPos)
-            vine.breakNaturally(tool)
-        }
-
+        val silentBlockList = ArrayList<BlockPos>(treeBlocks.size)
         val hinge = baseBlock.location.add(0.5, 0.0, 0.5)
 
         var direction = player.location.direction.setY(0.0)

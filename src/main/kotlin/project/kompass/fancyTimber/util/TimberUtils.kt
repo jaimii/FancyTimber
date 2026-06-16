@@ -10,7 +10,6 @@ import org.bukkit.block.data.BlockData
 
 object TimberUtils {
 
-    // Dynamically resolved blocks & particles to prevent compatibility crashes across 1.21 sub-versions
     val leafLitterMaterial: Material? = try {
         Material.valueOf("LEAF_LITTER")
     } catch (e: Exception) {
@@ -55,44 +54,56 @@ object TimberUtils {
     }
 
     fun isVine(type: Material): Boolean {
-        return type == Material.VINE || type.name.endsWith("VINES") || type.name.endsWith("VINES_PLANT")
+        return type == Material.VINE ||
+                type.name.endsWith("VINES") ||
+                type.name.endsWith("VINES_PLANT") ||
+                type.name.contains("HANGING_MOSS")
     }
 
     fun isTrunk(type: Material): Boolean {
+        val name = type.name
         return Tag.LOGS.isTagged(type) ||
+                name.contains("LOG") ||
+                name.contains("WOOD") ||
+                name.contains("STEM") ||
                 type == Material.MANGROVE_ROOTS ||
                 type == Material.MUDDY_MANGROVE_ROOTS ||
                 type == Material.MUSHROOM_STEM
     }
 
-    /**
-     * Identifies TREE CANOPY foliage. These blocks are fully included in the scan,
-     * turned into falling display blocks, and drop items at the end.
-     */
     fun isFoliage(type: Material): Boolean {
+        val name = type.name
         return Tag.LEAVES.isTagged(type) ||
+                name.contains("LEAVES") ||
                 type == Material.NETHER_WART_BLOCK ||
                 type == Material.WARPED_WART_BLOCK ||
                 type == Material.SHROOMLIGHT ||
                 type == Material.BROWN_MUSHROOM_BLOCK ||
                 type == Material.RED_MUSHROOM_BLOCK ||
                 type == Material.MANGROVE_PROPAGULE ||
-                type == Material.COCOA
+                type == Material.COCOA ||
+                type == Material.SNOW ||
+                type == Material.MOSS_CARPET ||
+                name.contains("PALE_MOSS_CARPET") ||
+                isVine(type)
     }
 
     /**
-     * Identifies GROUND foliage and ground cover. These blocks are completely ignored
-     * in pathfinding to avoid accidental inclusion or tree destruction.
+     * Identifies GROUND foliage and ground cover.
      */
     fun isExcludedFromScan(type: Material): Boolean {
+        // FIX: Ensure leaf blocks are never categorized as ground vegetation,
+        // even if Minecraft classes them under #flowers (e.g., Cherry and Flowering Azalea leaves)
+        if (type.name.contains("LEAVES")) return false
+
         if (leafLitterMaterial != null && type == leafLitterMaterial) return true
         if (wildflowersMaterial != null && type == wildflowersMaterial) return true
 
-        // Check standard Bukkit registry tags
+        if (type == Material.TORCH || type == Material.SOUL_TORCH || type == Material.REDSTONE_TORCH) return true
+
         if (Tag.FLOWERS.isTagged(type)) return true
         if (Tag.SAPLINGS.isTagged(type)) return true
 
-        // 2-tall flowers / double plant safety checks
         val name = type.name
         if (name == "PITCHER_PLANT" || name == "SUNFLOWER" || name == "PEONY" || name == "LILAC" || name == "ROSE_BUSH") return true
 
@@ -102,8 +113,7 @@ object TimberUtils {
                 type == Material.LARGE_FERN ||
                 type == Material.PINK_PETALS ||
                 type == Material.DEAD_BUSH ||
-                type == Material.MOSS_CARPET ||
-                type.name.contains("PALE_MOSS_CARPET") ||
+                type == Material.SWEET_BERRY_BUSH ||
                 type == Material.GLOW_LICHEN ||
                 type == Material.HANGING_ROOTS
     }
@@ -111,24 +121,36 @@ object TimberUtils {
     fun isNaturalEnvironment(type: Material): Boolean {
         if (type.isAir) return true
         if (isTrunk(type) || isFoliage(type) || isVine(type)) return true
-        if (Tag.DIRT.isTagged(type) || Tag.SAND.isTagged(type)) return true
-        if (Tag.FLOWERS.isTagged(type) || Tag.BASE_STONE_OVERWORLD.isTagged(type)) return true
-        if (Tag.ICE.isTagged(type) || Tag.SNOW.isTagged(type)) return true
+
+        if (Tag.DIRT.isTagged(type)) return true
+        if (Tag.SAND.isTagged(type)) return true
+        if (Tag.BASE_STONE_OVERWORLD.isTagged(type)) return true
+        if (Tag.BASE_STONE_NETHER.isTagged(type)) return true
+        if (Tag.ICE.isTagged(type)) return true
+        if (Tag.SNOW.isTagged(type)) return true
+        if (Tag.FLOWERS.isTagged(type)) return true
         if (Tag.SAPLINGS.isTagged(type)) return true
 
+        val name = type.name
+        if (name.contains("MOSS") || name.contains("ORE") || name.contains("STONE") ||
+            name.contains("DIRT") || name.contains("SAND") || name.contains("SNOW") ||
+            name.contains("ICE") || name.contains("SLATE") || name.contains("TUFF") ||
+            name.contains("TERRACOTTA") || name.contains("CLAY") || name.contains("PATH") ||
+            name.contains("GRAVEL") || name.contains("NYLIUM") || name.contains("CALCITE") ||
+            name.contains("FARMLAND") || name.contains("BASALT") || name.contains("OBSIDIAN") ||
+            name.contains("PRISMARINE") || name.contains("QUARTZ") || name.contains("AMETHYST")) return true
+
         return when (type) {
-            Material.MOSS_BLOCK, Material.MOSS_CARPET, Material.PINK_PETALS,
-            Material.SHORT_GRASS, Material.TALL_GRASS, Material.FERN, Material.LARGE_FERN,
-            Material.DEAD_BUSH, Material.GLOW_LICHEN, Material.HANGING_ROOTS,
-            Material.GRASS_BLOCK, Material.PODZOL, Material.MYCELIUM,
-            Material.MUD, Material.MUDDY_MANGROVE_ROOTS, Material.MANGROVE_ROOTS,
-            Material.MANGROVE_PROPAGULE, Material.COCOA, Material.BAMBOO,
-            Material.SNOW, Material.SNOW_BLOCK, Material.POWDER_SNOW,
+            Material.PINK_PETALS, Material.SHORT_GRASS, Material.TALL_GRASS,
+            Material.FERN, Material.LARGE_FERN, Material.DEAD_BUSH,
+            Material.GLOW_LICHEN, Material.HANGING_ROOTS, Material.SPORE_BLOSSOM,
+            Material.AZALEA, Material.FLOWERING_AZALEA, Material.BEE_NEST,
+            Material.MUD, Material.COCOA, Material.BAMBOO,
+            Material.GRAVEL, Material.CLAY,
             Material.WATER, Material.LAVA, Material.SEAGRASS, Material.KELP, Material.KELP_PLANT,
             Material.BROWN_MUSHROOM, Material.RED_MUSHROOM, Material.CRIMSON_FUNGUS, Material.WARPED_FUNGUS,
             Material.CRIMSON_ROOTS, Material.WARPED_ROOTS, Material.NETHER_SPROUTS,
-            Material.NETHERRACK, Material.SOUL_SAND, Material.SOUL_SOIL, Material.CRIMSON_NYLIUM, Material.WARPED_NYLIUM,
-            Material.MAGMA_BLOCK, Material.BONE_BLOCK -> true
+            Material.MAGMA_BLOCK, Material.BONE_BLOCK, Material.COBWEB -> true
             else -> false
         }
     }

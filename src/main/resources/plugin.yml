@@ -6,3 +6,13 @@ authors: [ JustJaimii ]
 depend: [ ProtocolLib ]
 description:
  Enhanced timber animations. Designed for Project Kompass.
+commands:
+ ftdebug:
+  description: Toggles FancyTimber in-game real-time debugging logs.
+  permission: fancytimber.debug
+  permission-message: §cYou do not have permission to execute this command.
+
+permissions:
+ fancytimber.debug:
+  description: Allows operators to toggle FancyTimber debug mode.
+  default: op
