@@ -4,6 +4,9 @@ import org.bukkit.Color
 import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.Particle
+import org.bukkit.Sound
+import org.bukkit.NamespacedKey
+import org.bukkit.Registry
 import org.bukkit.Tag
 import org.bukkit.World
 import org.bukkit.block.data.BlockData
@@ -53,6 +56,24 @@ object TimberUtils {
         }
     }
 
+    /**
+     * Resolves the native wood-breaking sound of the specific tree family.
+     */
+    fun getWoodBreakSound(family: String): Sound {
+        return when (family) {
+            "CHERRY" -> Registry.SOUNDS.get(NamespacedKey.minecraft("block.cherry_wood.break"))
+                ?: Sound.BLOCK_WOOD_BREAK
+
+            "BAMBOO" -> Registry.SOUNDS.get(NamespacedKey.minecraft("block.bamboo_wood.break"))
+                ?: Sound.BLOCK_WOOD_BREAK
+
+            "CRIMSON", "WARPED" -> Registry.SOUNDS.get(NamespacedKey.minecraft("block.nether_wood.break"))
+                ?: Sound.BLOCK_WOOD_BREAK
+
+            else -> Sound.BLOCK_WOOD_BREAK
+        }
+    }
+
     fun isVine(type: Material): Boolean {
         return type == Material.VINE ||
                 type.name.endsWith("VINES") ||
@@ -88,12 +109,7 @@ object TimberUtils {
                 isVine(type)
     }
 
-    /**
-     * Identifies GROUND foliage and ground cover.
-     */
     fun isExcludedFromScan(type: Material): Boolean {
-        // FIX: Ensure leaf blocks are never categorized as ground vegetation,
-        // even if Minecraft classes them under #flowers (e.g., Cherry and Flowering Azalea leaves)
         if (type.name.contains("LEAVES")) return false
 
         if (leafLitterMaterial != null && type == leafLitterMaterial) return true

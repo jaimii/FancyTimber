@@ -4,10 +4,14 @@ import org.bukkit.GameMode
 import org.bukkit.Material
 import org.bukkit.Sound
 import org.bukkit.Tag
+import org.bukkit.attribute.Attribute
+import org.bukkit.attribute.AttributeModifier
 import org.bukkit.entity.BlockDisplay
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.block.BlockBreakEvent
+import org.bukkit.event.block.BlockDamageAbortEvent
+import org.bukkit.event.block.BlockDamageEvent
 import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.util.Vector
 import org.joml.Vector3f
@@ -23,34 +27,77 @@ class BlockBreakListener(
     private val silentBlocks: MutableSet<BlockPos>
 ) : Listener {
 
+    private val fatigueKey = org.bukkit.NamespacedKey(plugin, "timber_fatigue")
+
+    @EventHandler(ignoreCancelled = true)
+    fun onBlockDamage(event: BlockDamageEvent) {
+        val player = event.player
+        val block = event.block
+        val tool = player.inventory.itemInMainHand
+
+        if (!TimberUtils.isTrunk(block.type)) return
+
+        val isAxe = Tag.ITEMS_AXES.isTagged(tool.type) || tool.type.name.endsWith("_AXE")
+        if (tool.type == Material.AIR || !isAxe) return
+        if (!player.isSneaking) return
+
+        plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
+            val scanResult = TreeScanner.detectTree(block, null) ?: return@Runnable
+
+            plugin.server.scheduler.runTask(plugin, Runnable {
+                plugin.scanCache[player.uniqueId] = scanResult
+
+                val breakSpeed = player.getAttribute(Attribute.BLOCK_BREAK_SPEED) ?: return@Runnable
+                removeMiningFatigue(player)
+
+                val size = scanResult.blocks.size
+                val fatiguePercent = (size / 1000.0).coerceAtMost(0.8)
+
+                val modifier = AttributeModifier(
+                    fatigueKey,
+                    -fatiguePercent,
+                    AttributeModifier.Operation.ADD_SCALAR
+                )
+                breakSpeed.addModifier(modifier)
+            })
+        })
+    }
+
+    @EventHandler
+    fun onBlockDamageAbort(event: BlockDamageAbortEvent) {
+        val player = event.player
+        plugin.scanCache.remove(player.uniqueId)
+        removeMiningFatigue(player)
+    }
+
     @EventHandler(ignoreCancelled = true)
     fun onBlockBreak(event: BlockBreakEvent) {
         val startBlock = event.block
         val player = event.player
         val tool = player.inventory.itemInMainHand
 
-        val isAxe = Tag.ITEMS_AXES.isTagged(tool.type) || tool.type.name.endsWith("_AXE")
-        val isTrunk = TimberUtils.isTrunk(startBlock.type)
-        val debugMode = plugin.debugMode // Read runtime debug state from main class
+        if (!TimberUtils.isTrunk(startBlock.type)) return
 
-        // Diagnostic requirement check output
-        if (debugMode && isAxe && startBlock.type.name.contains("LOG")) {
-            player.sendMessage("§e[FancyTimber Debug] §fChop detected!")
-            player.sendMessage("§e[FancyTimber Debug] §f- Tool: §6${tool.type.name}§f (Is Axe: §a$isAxe§f)")
-            player.sendMessage("§e[FancyTimber Debug] §f- Block: §6${startBlock.type.name}§f (Is Trunk: §a$isTrunk§f)")
-            player.sendMessage("§e[FancyTimber Debug] §f- Sneaking: §a${player.isSneaking}§f")
+        val isAxe = Tag.ITEMS_AXES.isTagged(tool.type) || tool.type.name.endsWith("_AXE")
+        if (tool.type == Material.AIR || !isAxe) return
+
+        removeMiningFatigue(player)
+
+        if (!player.isSneaking) {
+            plugin.scanCache.remove(player.uniqueId)
+            return
         }
 
-        if (!isTrunk) return
-        if (tool.type == Material.AIR || !isAxe) return
-        if (!player.isSneaking) return
-
+        val debugMode = plugin.debugMode
         val debugReceiver = if (debugMode) player else null
-        val scanResult = TreeScanner.detectTree(startBlock, debugReceiver) ?: return
+        val scanResult = plugin.scanCache.remove(player.uniqueId)
+            ?: TreeScanner.detectTree(startBlock, debugReceiver)
+            ?: return
+
         val treeBlocks = scanResult.blocks
         val baseBlock = scanResult.baseBlock
 
-        event.isDropItems = false
+        event.isCancelled = true
         val isCreative = player.gameMode == GameMode.CREATIVE
 
         val silentBlockList = ArrayList<BlockPos>(treeBlocks.size)
@@ -108,21 +155,46 @@ class BlockBreakListener(
             player.damageItemStack(EquipmentSlot.HAND, logsBroken - 1)
         }
 
-        startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.5f, 0.8f)
+        val family = TimberUtils.getTreeFamily(startBlock.type)
+        val nativeWoodSound = TimberUtils.getWoodBreakSound(family)
+        startBlock.world.playSound(hinge, nativeWoodSound, 1.0f, 0.5f) // Deep wooden fracture
+        startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.3f, 0.7f) // Splintering creak under load
 
-        TreeFallAnimation(
-            displaysAndDrops = displaysAndDrops,
-            hinge = hinge,
-            direction = direction,
-            isCreative = isCreative,
-            player = player,
-            axisX = axisX,
-            axisY = axisY,
-            axisZ = axisZ
-        ).runTaskTimer(plugin, 1L, 1L)
+        plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
+            val precalculatedFrames = TreeFallAnimation.precalculate(
+                displaysAndDrops,
+                axisX, axisY, axisZ,
+                45.0f,
+                150,
+                0.015
+            )
+
+            plugin.server.scheduler.runTask(plugin, Runnable {
+                TreeFallAnimation(
+                    displaysAndDrops = displaysAndDrops,
+                    hinge = hinge,
+                    direction = direction,
+                    isCreative = isCreative,
+                    player = player,
+                    axisX = axisX,
+                    axisY = axisY,
+                    axisZ = axisZ,
+                    frames = precalculatedFrames
+                ).runTaskTimer(plugin, 1L, 1L)
+            })
+        })
 
         plugin.server.scheduler.runTaskLater(plugin, Runnable {
             silentBlockList.forEach { silentBlocks.remove(it) }
         }, 10L)
+    }
+
+    private fun removeMiningFatigue(player: Player) {
+        val breakSpeed = player.getAttribute(Attribute.BLOCK_BREAK_SPEED) ?: return
+        for (modifier in breakSpeed.modifiers) {
+            if (modifier.key == fatigueKey) {
+                breakSpeed.removeModifier(modifier)
+            }
+        }
     }
 }

@@ -1,10 +1,14 @@
 package project.kompass.fancyTimber.animation
 
-import org.bukkit.*
+import org.bukkit.GameMode
+import org.bukkit.Location
+import org.bukkit.Material
+import org.bukkit.Particle
+import org.bukkit.Sound
+import org.bukkit.World
 import org.bukkit.damage.DamageSource
 import org.bukkit.damage.DamageType
 import org.bukkit.entity.ArmorStand
-import org.bukkit.entity.LivingEntity
 import org.bukkit.entity.Player
 import org.bukkit.scheduler.BukkitRunnable
 import org.bukkit.util.Transformation
@@ -15,6 +19,13 @@ import project.kompass.fancyTimber.model.BlockDataInfo
 import project.kompass.fancyTimber.packet.PacketHelper
 import project.kompass.fancyTimber.util.TimberUtils
 
+data class AnimationFrame(
+    val tick: Int,
+    val angle: Float,
+    val quat: Quaternionf,
+    val translations: List<Vector3f>
+)
+
 class TreeFallAnimation(
     private val displaysAndDrops: List<BlockDataInfo>,
     private val hinge: Location,
@@ -23,66 +34,57 @@ class TreeFallAnimation(
     private val player: Player,
     private val axisX: Float,
     private val axisY: Float,
-    private val axisZ: Float
+    private val axisZ: Float,
+    private val frames: List<AnimationFrame>
 ) : BukkitRunnable() {
 
     private var tick = 0
-    private val referenceTicks = 45.0f
     private val damageSource = DamageSource.builder(DamageType.FALLING_BLOCK).build()
 
-    private var verticalVelocity = 0.0
-    private var verticalDisplacement = 0.0
-    private val gravityAcceleration = 0.015
-
-    private val tempRotated = Vector3f()
     private val cachedLocations = Array(displaysAndDrops.size) {
         Location(hinge.world, 0.0, 0.0, 0.0)
     }
 
     private val stumpFakeEntityId = 999120 + hinge.blockX + hinge.blockZ
 
-    // Dynamic measurements to target only log segments in the upper half of the tree
     private val maxOffsetY = displaysAndDrops.maxOfOrNull { it.offset.y } ?: 0f
     private val upperHalfThreshold = maxOffsetY / 2.0f
 
+    private val searchRadius = calculateSearchRadius()
+
     override fun run() {
         try {
-            val progress = (tick / referenceTicks).coerceAtMost(1.0f)
-            val ease = progress * progress
-            val angle = ease * (Math.PI / 2.0).toFloat()
+            if (tick >= frames.size) {
+                finishFall()
+                this.cancel()
+                return
+            }
 
-            val quat = Quaternionf().rotationAxis(angle, axisX, axisY, axisZ)
+            val frame = frames[tick]
             var collided = false
 
             if (tick % 15 == 0 && tick > 0) {
                 hinge.world.playSound(hinge, Sound.BLOCK_WOOD_STEP, 0.6f, 0.5f)
             }
 
-            val crackStage = (ease * 9).toInt().coerceIn(0, 9)
+            val crackStage = ((tick / 45.0f).coerceAtMost(1.0f) * 9).toInt().coerceIn(0, 9)
             sendStumpCracks(crackStage)
 
-            if (progress >= 0.5f) {
-                val gravityProgress = (progress - 0.5f) * 2.0f
-                val currentGravity = gravityAcceleration * gravityProgress
-                verticalVelocity += currentGravity
-                verticalDisplacement += verticalVelocity
+            val entities = hinge.world.getNearbyLivingEntities(hinge, searchRadius, searchRadius, searchRadius) { entity ->
+                entity !is ArmorStand
             }
 
-            // PASS 1: Calculate provisional locations and measure ground-penetration (clipping)
             var maxClipping = 0.0
             val groundCache = HashMap<Long, Double>()
 
             for (i in displaysAndDrops.indices) {
-                val info = displaysAndDrops[i]
-
-                info.offset.rotate(quat, tempRotated)
+                val translation = frame.translations[i]
 
                 val newLoc = cachedLocations[i]
-                newLoc.x = hinge.x + tempRotated.x
-                newLoc.y = hinge.y + tempRotated.y - verticalDisplacement
-                newLoc.z = hinge.z + tempRotated.z
+                newLoc.x = hinge.x + translation.x
+                newLoc.y = hinge.y + translation.y
+                newLoc.z = hinge.z + translation.z
 
-                // Cache column heights using optimized coordinates key
                 val chunkKey = (newLoc.blockX.toLong() shl 32) or (newLoc.blockZ.toLong() and 0xFFFFFFFFL)
                 val groundY = groundCache.getOrPut(chunkKey) {
                     getGroundYBelow(newLoc.world, newLoc.blockX, newLoc.y, newLoc.blockZ)
@@ -94,15 +96,12 @@ class TreeFallAnimation(
                 }
             }
 
-            // PASS 2: Shift all blocks rigidly by the maximum clipping value and run upper-half log collisions
             for (i in displaysAndDrops.indices) {
                 val info = displaysAndDrops[i]
                 val newLoc = cachedLocations[i]
 
-                // Adjust height uniformly so the tree remains connected
                 newLoc.y = newLoc.y + maxClipping
 
-                // Collision logic strictly for trunk segments in the upper half of the tree
                 if (tick > 5 && info.isTrunk && info.offset.y >= upperHalfThreshold) {
                     val blockType = newLoc.block.type
 
@@ -118,15 +117,20 @@ class TreeFallAnimation(
                         collided = true
                     }
 
-                    val nearbyEntities = newLoc.world.getNearbyEntities(newLoc, 0.5, 0.5, 0.5)
-                    for (entity in nearbyEntities) {
-                        if (entity is LivingEntity && entity !is ArmorStand) {
-                            if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
-                                continue
-                            }
-                            if (entity == player && tick < 12) {
-                                continue
-                            }
+                    val blockX = newLoc.x
+                    val blockY = newLoc.y
+                    val blockZ = newLoc.z
+
+                    for (entity in entities) {
+                        if (entity is Player && (entity.gameMode == GameMode.CREATIVE || entity.gameMode == GameMode.SPECTATOR)) {
+                            continue
+                        }
+                        if (entity == player && tick < 12) {
+                            continue
+                        }
+
+                        val hitBox = entity.boundingBox.expand(0.5)
+                        if (hitBox.contains(blockX, blockY, blockZ)) {
                             entity.damage(10.0, damageSource)
                             collided = true
                         }
@@ -134,7 +138,7 @@ class TreeFallAnimation(
                 }
             }
 
-            if (collided || tick > 150) {
+            if (collided) {
                 finishFall()
                 this.cancel()
                 return
@@ -145,7 +149,7 @@ class TreeFallAnimation(
                 info.display.teleport(cachedLocations[i])
                 info.display.transformation = Transformation(
                     Vector3f(),
-                    quat,
+                    frame.quat,
                     Vector3f(1f, 1f, 1f),
                     Quaternionf()
                 )
@@ -157,25 +161,27 @@ class TreeFallAnimation(
         }
     }
 
-    /**
-     * Resolves the exact ground level at the current column (X, Z) while ignoring any overhead
-     * blocks (like adjacent leaves, roof structures, or cliffs above) to prevent layout jumping.
-     */
+    private fun calculateSearchRadius(): Double {
+        var maxDistSq = 1.0
+        for (info in displaysAndDrops) {
+            val distSq = info.offset.lengthSquared().toDouble()
+            if (distSq > maxDistSq) {
+                maxDistSq = distSq
+            }
+        }
+        return Math.sqrt(maxDistSq) + 2.0
+    }
+
     private fun getGroundYBelow(world: World, x: Int, tempY: Double, z: Int): Double {
         val highestY = world.getHighestBlockYAt(x, z).toDouble()
-        // If the absolute highest block in the column is below the entity's current height,
-        // it is the actual ground. We can use it instantly in O(1) time.
         if (highestY <= tempY + 1.0) {
             return highestY
         }
 
-        // Otherwise, there is an overhead block. We search downwards starting
-        // from the block's theoretical position.
         var y = (tempY + 1.0).toInt()
         val minHeight = world.minHeight
         while (y > minHeight) {
             val type = world.getType(x, y, z)
-            // Skip non-solid blocks, foliage, and vines so they are ignored during the downward trace
             if (type.isSolid && type != Material.AIR && !TimberUtils.isFoliage(type) && !TimberUtils.isVine(type)) {
                 return y.toDouble() + 1.0
             }
@@ -198,8 +204,21 @@ class TreeFallAnimation(
 
         sendStumpCracks(-1)
 
-        world.playSound(hinge, Sound.BLOCK_WOOD_BREAK, 1.2f, 0.6f)
-        world.playSound(hinge, Sound.BLOCK_GRASS_BREAK, 1.2f, 0.8f)
+        var sumX = 0.0
+        var sumY = 0.0
+        var sumZ = 0.0
+        var count = 0
+        for (info in displaysAndDrops) {
+            val loc = info.display.location
+            sumX += loc.x
+            sumY += loc.y
+            sumZ += loc.z
+            count++
+        }
+        val impactLoc = if (count > 0) Location(world, sumX / count, sumY / count, sumZ / count) else hinge
+
+        val family = TimberUtils.getTreeFamily(displaysAndDrops.firstOrNull()?.blockData?.material ?: Material.OAK_LOG)
+        playLandingEffects(world, impactLoc, family)
 
         val dropVelocity = direction.clone().multiply(0.4).setY(0.25)
 
@@ -222,6 +241,76 @@ class TreeFallAnimation(
                     }
                 }
             }
+        }
+    }
+
+    private fun playLandingEffects(world: World, impactLoc: Location, family: String) {
+        val blockType = impactLoc.block.type
+
+        // Play the wooden impact sound relative to the species
+        val woodBreakSound = TimberUtils.getWoodBreakSound(family)
+        world.playSound(impactLoc, woodBreakSound, 1.2f, 0.6f)
+
+        // Play the ground-type surface response
+        val name = blockType.name
+        when {
+            name.contains("WATER") || name.contains("LAVA") -> {
+                world.playSound(impactLoc, Sound.ENTITY_GENERIC_SPLASH, 1.0f, 0.8f)
+                world.spawnParticle(Particle.SPLASH, impactLoc.add(0.0, 0.5, 0.0), 20, 0.5, 0.2, 0.5, 0.1)
+            }
+            name.contains("STONE") || name.contains("DEEPSLATE") || name.contains("TUFF") -> {
+                world.playSound(impactLoc, Sound.BLOCK_STONE_BREAK, 1.0f, 0.7f)
+            }
+            name.contains("SAND") -> {
+                world.playSound(impactLoc, Sound.BLOCK_SAND_BREAK, 1.1f, 0.8f)
+            }
+            name.contains("SNOW") -> {
+                world.playSound(impactLoc, Sound.BLOCK_SNOW_BREAK, 1.1f, 0.8f)
+            }
+            else -> { // Default to standard grassy soil
+                world.playSound(impactLoc, Sound.BLOCK_GRASS_BREAK, 1.0f, 0.8f)
+            }
+        }
+    }
+
+    companion object {
+        fun precalculate(
+            displays: List<BlockDataInfo>,
+            axisX: Float,
+            axisY: Float,
+            axisZ: Float,
+            referenceTicks: Float,
+            totalTicks: Int,
+            gravityAcceleration: Double
+        ): List<AnimationFrame> {
+            val frames = ArrayList<AnimationFrame>(totalTicks)
+            var verticalVelocity = 0.0
+            var verticalDisplacement = 0.0
+
+            for (tick in 0..totalTicks) {
+                val progress = (tick / referenceTicks).coerceAtMost(1.0f)
+                val eased = progress * progress * progress * (progress * (progress * 6.0f - 15.0f) + 10.0f)
+                val angle = eased * (Math.PI / 2.0).toFloat()
+
+                val quat = Quaternionf().rotationAxis(angle, axisX, axisY, axisZ)
+
+                if (progress >= 0.5f) {
+                    val gravityProgress = (progress - 0.5f) * 2.0f
+                    val currentGravity = gravityAcceleration * gravityProgress
+                    verticalVelocity += currentGravity
+                    verticalDisplacement += verticalVelocity
+                }
+
+                val translations = ArrayList<Vector3f>(displays.size)
+                for (info in displays) {
+                    val rotatedOffset = Vector3f(info.offset).rotate(quat)
+                    rotatedOffset.y -= verticalDisplacement.toFloat()
+                    translations.add(rotatedOffset)
+                }
+
+                frames.add(AnimationFrame(tick, angle, quat, translations))
+            }
+            return frames
         }
     }
 }
