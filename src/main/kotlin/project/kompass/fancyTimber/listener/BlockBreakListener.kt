@@ -4,15 +4,16 @@ import org.bukkit.GameMode
 import org.bukkit.Material
 import org.bukkit.Sound
 import org.bukkit.Tag
-import org.bukkit.attribute.Attribute
-import org.bukkit.attribute.AttributeModifier
 import org.bukkit.entity.BlockDisplay
+import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockDamageAbortEvent
 import org.bukkit.event.block.BlockDamageEvent
 import org.bukkit.inventory.EquipmentSlot
+import org.bukkit.potion.PotionEffect
+import org.bukkit.potion.PotionEffectType
 import org.bukkit.util.Vector
 import org.joml.Vector3f
 import project.kompass.fancyTimber.FancyTimber
@@ -27,8 +28,6 @@ class BlockBreakListener(
     private val silentBlocks: MutableSet<BlockPos>
 ) : Listener {
 
-    private val fatigueKey = org.bukkit.NamespacedKey(plugin, "timber_fatigue")
-
     @EventHandler(ignoreCancelled = true)
     fun onBlockDamage(event: BlockDamageEvent) {
         val player = event.player
@@ -41,24 +40,22 @@ class BlockBreakListener(
         if (tool.type == Material.AIR || !isAxe) return
         if (!player.isSneaking) return
 
+        // Trace and cache the tree structure asynchronously while mining.
         plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
             val scanResult = TreeScanner.detectTree(block, null) ?: return@Runnable
 
+            // Sync back to apply mining fatigue.
             plugin.server.scheduler.runTask(plugin, Runnable {
                 plugin.scanCache[player.uniqueId] = scanResult
 
-                val breakSpeed = player.getAttribute(Attribute.BLOCK_BREAK_SPEED) ?: return@Runnable
                 removeMiningFatigue(player)
 
                 val size = scanResult.blocks.size
-                val fatiguePercent = (size / 1000.0).coerceAtMost(0.8)
-
-                val modifier = AttributeModifier(
-                    fatigueKey,
-                    -fatiguePercent,
-                    AttributeModifier.Operation.ADD_SCALAR
-                )
-                breakSpeed.addModifier(modifier)
+                if (size > 15) {
+                    player.addPotionEffect(
+                        PotionEffect(PotionEffectType.MINING_FATIGUE, 1200, 0, true, false, false)
+                    )
+                }
             })
         })
     }
@@ -97,6 +94,7 @@ class BlockBreakListener(
         val treeBlocks = scanResult.blocks
         val baseBlock = scanResult.baseBlock
 
+        // Prevent double block break sound packets from standard Paper/Bukkit processing
         event.isCancelled = true
         val isCreative = player.gameMode == GameMode.CREATIVE
 
@@ -155,10 +153,11 @@ class BlockBreakListener(
             player.damageItemStack(EquipmentSlot.HAND, logsBroken - 1)
         }
 
+        // Play the initial, highly immersive cracking sound sequence
         val family = TimberUtils.getTreeFamily(startBlock.type)
         val nativeWoodSound = TimberUtils.getWoodBreakSound(family)
         startBlock.world.playSound(hinge, nativeWoodSound, 1.0f, 0.5f) // Deep wooden fracture
-        startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.3f, 0.7f) // Splintering creak under load
+        startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.3f, 0.7f) // Splintering creak
 
         plugin.server.scheduler.runTaskAsynchronously(plugin, Runnable {
             val precalculatedFrames = TreeFallAnimation.precalculate(
@@ -190,11 +189,6 @@ class BlockBreakListener(
     }
 
     private fun removeMiningFatigue(player: Player) {
-        val breakSpeed = player.getAttribute(Attribute.BLOCK_BREAK_SPEED) ?: return
-        for (modifier in breakSpeed.modifiers) {
-            if (modifier.key == fatigueKey) {
-                breakSpeed.removeModifier(modifier)
-            }
-        }
+        player.removePotionEffect(PotionEffectType.MINING_FATIGUE)
     }
 }
