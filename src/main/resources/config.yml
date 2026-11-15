@@ -1,0 +1,54 @@
+# ==========================================
+# FancyTimber Configuration (Minecraft 26.3)
+# ==========================================
+
+limits:
+  # Maximum total BlockDisplay entities allowed across the server at once
+  max-active-displays: 1200
+
+cooldown:
+  # Cooldown in milliseconds between tree fells per player (0 = disabled)
+  ms: 0
+
+balancing:
+  # Hunger exhaustion added per felled block (0.0 = disabled)
+  exhaustion-per-block: 0.005
+
+animation:
+  enabled: true
+  # Fell mode: INSTANT (breaks into drops on impact) or LAYDOWN (rests on ground to harvest)
+  fell-mode: "INSTANT"
+  # Direction mode: LEAN (tips toward heaviest canopy side), PLAYER, NATURAL, or RANDOM
+  direction-mode: "LEAN"
+  max-animated-logs: 256
+  max-animated-leaves: 500
+  fall-speed: 1.0
+  # Teleport & interpolation smoothness ticks (1 to 5)
+  smoothness: 2
+  gravity-curve: 1.35
+  max-tilt-degrees: 92.0
+
+  # Secondary motion effects
+  wind-sway: true
+  wind-sway-strength: 0.065
+  leaf-drag-ticks: 4
+
+  # Mid-air & impact visual/audio details
+  leaf-particles: true
+  trunk-dust-trails: true
+  particle-density: 0.45
+  trunk-crack-sounds: true
+  impact-shockwave: true
+
+  laydown:
+    fall-speed: 1.0
+    slide-distance: 1.5
+    break-into-ground: true
+    require-clear-path: true
+
+effects:
+  show-particles: true
+  play-sound: true
+
+feedback:
+  show-actionbar: true

@@ -1,36 +1,37 @@
 plugins {
-    kotlin("jvm") version "2.1.0"
-    id("com.gradleup.shadow") version "8.3.0"
-    id("xyz.jpenilla.run-paper") version "2.3.1"
+    kotlin("jvm") version "2.4.20"
+    id("com.gradleup.shadow") version "8.3.5"
+    id("xyz.jpenilla.run-paper") version "3.0.2"
 }
 
 group = "project.kompass"
-version = "1.0"
+version = "2.1"
 
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
+    maven("https://repo.codemc.io/repository/maven-releases/")
+    maven("https://repo.codemc.io/repository/maven-snapshots/")
 }
 
 dependencies {
-    compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
-    compileOnly("net.dmulloy2:ProtocolLib:5.4.0-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:26.3.build.+")
+    compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
     implementation(kotlin("stdlib"))
 }
 
 tasks {
     runServer {
-        minecraftVersion("1.21.11")
+        minecraftVersion("26.3")
     }
-}
 
-val targetJavaVersion = 21
-kotlin {
-    jvmToolchain(targetJavaVersion)
-}
+    shadowJar {
+        archiveClassifier.set("")
+    }
 
-tasks.build {
-    dependsOn("shadowJar")
+    build {
+        dependsOn(shadowJar)
+    }
 }
 
 tasks.processResources {

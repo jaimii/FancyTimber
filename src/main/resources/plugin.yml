@@ -1,11 +1,16 @@
 name: FancyTimber
-version: '1.0'
+version: '${version}'
 main: project.kompass.fancyTimber.FancyTimber
-api-version: '1.21'
+api-version: '26.3'
 authors: [ JustJaimii ]
-depend: [ ProtocolLib ]
-description:
- Enhanced timber animations. Designed for Project Kompass.
+depend: [ packetevents ]
+softdepend: [ WorldGuard, GriefPrevention, Towny, LWC ]
+folia-supported: true
+description: Enhanced timber animations. Designed for Project Kompass.
+
+libraries:
+ - org.jetbrains.kotlin:kotlin-stdlib:2.4.20
+
 commands:
  ftdebug:
   description: Toggles FancyTimber in-game real-time debugging logs.

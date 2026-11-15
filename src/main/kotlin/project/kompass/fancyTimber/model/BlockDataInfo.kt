@@ -10,5 +10,9 @@ data class BlockDataInfo(
     val display: BlockDisplay,
     val drops: Collection<ItemStack>,
     val blockData: BlockData,
-    val isTrunk: Boolean
+    val isTrunk: Boolean,
+    val heightFactor: Double = 0.0,
+    val delayTicks: Int = 0,
+    val swayPhase: Float = 0f,
+    val swayStrength: Float = 0f
 )

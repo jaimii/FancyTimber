@@ -1,28 +1,23 @@
 package project.kompass.fancyTimber.packet
 
-import com.comphenix.protocol.PacketType
-import com.comphenix.protocol.ProtocolLibrary
-import com.comphenix.protocol.wrappers.BlockPosition
+import com.github.retrooper.packetevents.PacketEvents
+import com.github.retrooper.packetevents.util.Vector3i
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBlockBreakAnimation
 import org.bukkit.Location
 import org.bukkit.entity.Player
 
 object PacketHelper {
 
     /**
-     * Sends a client-side block break animation (cracking effect) stage to a player.
+     * Sends a client-side block break animation (cracking effect) stage to a player via PacketEvents.
      * @param fakeEntityId A unique ID to represent the cracking source.
      * @param stage The crack level (0-9, or -1 to clear the cracks).
      */
     fun sendBlockCrack(player: Player, fakeEntityId: Int, loc: Location, stage: Int) {
-        val protocolManager = ProtocolLibrary.getProtocolManager()
-        val packet = protocolManager.createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION)
-
-        packet.integers.write(0, fakeEntityId)
-        packet.blockPositionModifier.write(0, BlockPosition(loc.blockX, loc.blockY, loc.blockZ))
-        packet.integers.write(1, stage)
-
         try {
-            protocolManager.sendServerPacket(player, packet)
+            val pos = Vector3i(loc.blockX, loc.blockY, loc.blockZ)
+            val packet = WrapperPlayServerBlockBreakAnimation(fakeEntityId, pos, stage.toByte())
+            PacketEvents.getAPI().playerManager.sendPacket(player, packet)
         } catch (e: Exception) {
             // Ignored defensively to prevent thread crashes during packet transport
         }
