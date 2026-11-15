@@ -4,7 +4,7 @@
 
 **FancyTimber** brings realistic, physics-inspired tree felling animations to Minecraft **26.3** (Paper, Purpur, and Folia). Instead of trees vanishing instantly or floating in mid-air, sneaking while chopping a tree with an axe causes the entire trunk, branches, and canopy to crack, sway, and topple over as a single solid structure—complete with dynamic audio, trailing leaves, terrain-aware impact effects, and built-in anti-grief protections.
 
-*Requires (PacketEvents)[https://modrinth.com/plugin/packetevents] installed on your server.*
+*Requires [PacketEvents](https://modrinth.com/plugin/packetevents) installed on your server.*
 
 ---
 
