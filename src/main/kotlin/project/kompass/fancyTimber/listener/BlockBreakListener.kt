@@ -16,6 +16,7 @@ import org.bukkit.event.block.BlockDamageEvent
 import org.bukkit.event.player.PlayerItemHeldEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.inventory.EquipmentSlot
+import org.bukkit.inventory.ItemStack
 import org.bukkit.potion.PotionEffect
 import org.bukkit.potion.PotionEffectType
 import org.bukkit.util.Vector
@@ -57,13 +58,13 @@ class BlockBreakListener(
 
         val uuid = player.uniqueId
 
-        // 1. If the clicked block is already part of the player's cached tree, skip re-scanning
+        // Skip re-scanning if this block is already part of the player's cached tree
         val existingCache = plugin.scanCache[uuid]
         if (existingCache != null && block in existingCache.logs) {
             return
         }
 
-        // 2. Debounce rapid clicks (250ms cooldown between damage scans)
+        // Debounce rapid clicks (250ms cooldown between damage scans)
         val now = System.currentTimeMillis()
         val lastScan = lastDamageScanMs.getOrDefault(uuid, 0L)
         if (now - lastScan < 250L) return
@@ -71,7 +72,7 @@ class BlockBreakListener(
 
         val config = plugin.animationConfig
 
-        // Run scan safely on the region thread owning the block (BlockDamageEvent is already on this thread)
+        // Live world scan runs safely on the region thread owning the block
         val scanResult = TreeScanner.detectTree(
             startBlock = block,
             debugReceiver = null,
@@ -143,8 +144,8 @@ class BlockBreakListener(
         val debugReceiver = if (plugin.debugMode) player else null
         val cached = plugin.scanCache.remove(player.uniqueId)
 
-        // Validate that the cached scan actually belongs to the broken block
-        val scanResult = if (cached != null && startBlock in cached.logs && ! plugin.debugMode) {
+        // Reuse cached scan if valid and debug mode is disabled
+        val scanResult = if (cached != null && startBlock in cached.logs && !plugin.debugMode) {
             cached
         } else {
             TreeScanner.detectTree(
@@ -155,7 +156,7 @@ class BlockBreakListener(
             )
         } ?: return
 
-        // Deduplicate protection checks by (X, Z) column to avoid hundreds of redundant claim queries
+        // Deduplicate protection checks by (X, Z) column
         val columnProtectionCache = HashMap<Long, Boolean>()
         val allowedBlocks = ArrayList<Block>(scanResult.blocks.size)
 
@@ -188,7 +189,7 @@ class BlockBreakListener(
             cooldowns[player.uniqueId] = now + cooldownMs
         }
 
-        // Global entity cap protection: fallback to instant break if active displays exceed server cap
+        // Global entity cap protection: fallback to instant break if displays exceed cap
         if (!animConfig.enabled || plugin.activeDisplays.size + allowedBlocks.size > plugin.maxActiveDisplays) {
             var logsBroken = 0
             for (b in allowedBlocks) {
@@ -289,7 +290,7 @@ class BlockBreakListener(
             startBlock.world.playSound(hinge, Sound.ENTITY_ZOMBIE_BREAK_WOODEN_DOOR, 0.3f, 0.7f)
         }
 
-        // Exact frame count tailored to the tree's duration + leaf drag
+        // Offload all 3D frame math asynchronously via SchedulerUtil.runAsync
         val totalFrames = baseDuration + animConfig.leafDragTicks + 15
         SchedulerUtil.runAsync(plugin) {
             val precalculatedFrames = TreeFallAnimation.precalculate(
@@ -303,6 +304,7 @@ class BlockBreakListener(
                 config = animConfig
             )
 
+            // Hop back onto the region thread owning the hinge to run the animation
             SchedulerUtil.runRegionTask(plugin, hinge) {
                 TreeFallAnimation(
                     plugin = plugin,
@@ -326,7 +328,7 @@ class BlockBreakListener(
 
     private fun applyDurabilityAndExhaustion(
         player: Player,
-        tool: org.bukkit.inventory.ItemStack,
+        tool: ItemStack,
         logsBroken: Int,
         totalBlocks: Int,
         isCreative: Boolean

@@ -1,6 +1,7 @@
 package project.kompass.fancyTimber.scanner
 
 import org.bukkit.Material
+import org.bukkit.Tag
 import org.bukkit.World
 import org.bukkit.block.Block
 import org.bukkit.block.data.type.Leaves
@@ -13,7 +14,15 @@ import kotlin.math.min
 
 object TreeScanner {
 
-    private val TRUNK_PRIORITY_DIRS = arrayOf(
+    // Strictly 6 cardinal directions (matches Minecraft's Manhattan leaf distance)
+    private val CARDINAL_DIRS = arrayOf(
+        intArrayOf(0, 1, 0), intArrayOf(0, -1, 0),
+        intArrayOf(1, 0, 0), intArrayOf(-1, 0, 0),
+        intArrayOf(0, 0, 1), intArrayOf(0, 0, -1)
+    )
+
+    // 26 directions with vertical/cardinal prioritized first (used for trunk tracing & non-leaf attachments)
+    private val ALL_DIRS = arrayOf(
         intArrayOf(0, 1, 0), intArrayOf(0, -1, 0),
         intArrayOf(1, 0, 0), intArrayOf(-1, 0, 0), intArrayOf(0, 0, 1), intArrayOf(0, 0, -1),
         intArrayOf(1, 1, 0), intArrayOf(-1, 1, 0), intArrayOf(1, -1, 0), intArrayOf(-1, -1, 0),
@@ -27,6 +36,10 @@ object TreeScanner {
         return ((x.toLong() and 0x3FFFFFFL) shl 38) or
                 ((z.toLong() and 0x3FFFFFFL) shl 12) or
                 (y.toLong() and 0xFFFL)
+    }
+
+    private fun isPureLeaf(type: Material): Boolean {
+        return Tag.LEAVES.isTagged(type) || type.name.endsWith("_LEAVES")
     }
 
     fun detectTree(
@@ -45,25 +58,31 @@ object TreeScanner {
         val trunkRadius = detectTrunkRadius(world, startBlock.x, startBlock.y, startBlock.z)
         val trunks = LinkedHashSet<Block>()
         val trunkPosSet = HashSet<Long>()
+        val ownTrunks = IntPointList(32)
         val trunkQueue = ArrayDeque<Block>()
         val branchQueue = ArrayDeque<Block>()
 
         trunkQueue.add(startBlock)
         trunks.add(startBlock)
         trunkPosSet.add(packPos(startBlock.x, startBlock.y, startBlock.z))
+        ownTrunks.add(startBlock.x, startBlock.y, startBlock.z)
 
         var baseBlock = startBlock
+        var minX = startBlock.x
+        var maxX = startBlock.x
         var minY = startBlock.y
         var maxY = startBlock.y
+        var minZ = startBlock.z
+        var maxZ = startBlock.z
 
-        // 1. Trunk-First Priority BFS
+        // 1. Trunk-First Priority BFS (Structure/Building checks happen ONLY here on bark/logs)
         while ((trunkQueue.isNotEmpty() || branchQueue.isNotEmpty()) && trunks.size < maxLogs) {
             val current = if (trunkQueue.isNotEmpty()) trunkQueue.removeFirst() else branchQueue.removeFirst()
             val curX = current.x
             val curY = current.y
             val curZ = current.z
 
-            for (dir in TRUNK_PRIORITY_DIRS) {
+            for (dir in ALL_DIRS) {
                 if (trunks.size >= maxLogs) break
                 val adjX = curX + dir[0]
                 val adjY = curY + dir[1]
@@ -75,7 +94,7 @@ object TreeScanner {
 
                 if (TimberUtils.isExcludedFromScan(adjType)) continue
 
-                // Only abort if the trunk directly touches a man-made structure block (planks, doors, glass, wall torches, etc.)
+                // Structure safety check runs exclusively on trunk/bark neighbors
                 if (TimberUtils.isBuildingBlock(adjType)) {
                     debugReceiver?.sendMessage(
                         "§e[FancyTimber Debug] §cScan Aborted! Building block next to trunk: §e$adjType §fat [§a$adjX, $adjY, $adjZ§f]"
@@ -94,6 +113,7 @@ object TreeScanner {
                                 val adjBlock = world.getBlockAt(adjX, adjY, adjZ)
                                 trunks.add(adjBlock)
                                 trunkPosSet.add(packed)
+                                ownTrunks.add(adjX, adjY, adjZ)
 
                                 if (isWithinTrunkAxis(adjX, adjZ, startBlock.x, startBlock.z, trunkRadius)) {
                                     trunkQueue.add(adjBlock)
@@ -101,8 +121,12 @@ object TreeScanner {
                                     branchQueue.add(adjBlock)
                                 }
                                 if (adjY < baseBlock.y) baseBlock = adjBlock
+                                minX = min(minX, adjX)
+                                maxX = max(maxX, adjX)
                                 minY = min(minY, adjY)
                                 maxY = max(maxY, adjY)
+                                minZ = min(minZ, adjZ)
+                                maxZ = max(maxZ, adjZ)
                             }
                         }
                     }
@@ -127,6 +151,12 @@ object TreeScanner {
             )
         }
 
+        // 1.5. Locate nearby foreign trunks of the same family for exact Voronoi leaf ownership
+        val foreignTrunks = findForeignTrunks(world, minX, maxX, minY, maxY, minZ, maxZ, startFamily, trunkPosSet)
+        if (debugReceiver != null && foreignTrunks.size > 0) {
+            debugReceiver.sendMessage("§e[FancyTimber Debug] §fDetected §e${foreignTrunks.size}§f nearby foreign trunk blocks (Voronoi split active).")
+        }
+
         val treeBlocks = ArrayList<Block>(trunks.size + 128)
         treeBlocks.addAll(trunks)
 
@@ -144,7 +174,7 @@ object TreeScanner {
         var weightedLeafScore = 0
         var evaluatedLeavesCount = 0
 
-        // 2. Canopy & Hanging Attachment Tracing (Leaves, Vines, Propagules, Shelf Mushrooms)
+        // 2. Canopy & Attachment Tracing (NO building-block abort here; leaves touching structures are allowed)
         while (foliageQueue.isNotEmpty() && foliage.size < maxLeaves && treeBlocks.size < 2500) {
             val current = foliageQueue.removeFirst()
             val dist = distanceQueue.removeFirst()
@@ -154,101 +184,66 @@ object TreeScanner {
 
             if (dist >= 6) continue
 
-            for (dx in -1..1) {
-                for (dy in -1..1) {
-                    for (dz in -1..1) {
-                        if (dx == 0 && dy == 0 && dz == 0) continue
-                        val adjX = curX + dx
-                        val adjY = curY + dy
-                        val adjZ = curZ + dz
+            for (dir in ALL_DIRS) {
+                val dx = dir[0]
+                val dy = dir[1]
+                val dz = dir[2]
+                val stepManhattan = abs(dx) + abs(dy) + abs(dz)
+                val nextDist = dist + stepManhattan
+                if (nextDist > 6) continue
 
-                        if (!world.isChunkLoaded(adjX shr 4, adjZ shr 4)) continue
+                val adjX = curX + dx
+                val adjY = curY + dy
+                val adjZ = curZ + dz
 
-                        val adjType = world.getType(adjX, adjY, adjZ)
+                if (!world.isChunkLoaded(adjX shr 4, adjZ shr 4)) continue
 
-                        if (debugReceiver != null && evaluatedLeavesCount < 8 &&
-                            (adjType.name.contains("CHERRY") || adjType.name.contains("POPLAR") || adjType.name.contains("LEAVES"))
-                        ) {
-                            evaluatedLeavesCount++
-                            debugReceiver.sendMessage(
-                                "§e[FancyTimber Debug] §fNeighbor: §6$adjType§f | " +
-                                        "Excl: §a${TimberUtils.isExcludedFromScan(adjType)}§f, " +
-                                        "Bldg: §a${TimberUtils.isBuildingBlock(adjType)}§f, " +
-                                        "Fol: §a${TimberUtils.isFoliage(adjType)}§f, " +
-                                        "Fam: §b${TimberUtils.getTreeFamily(adjType)}"
-                            )
-                        }
+                val adjType = world.getType(adjX, adjY, adjZ)
 
-                        if (TimberUtils.isExcludedFromScan(adjType)) continue
+                if (TimberUtils.isExcludedFromScan(adjType)) continue
+                if (!TimberUtils.isFoliage(adjType)) continue
 
-                        if (TimberUtils.isBuildingBlock(adjType)) {
-                            debugReceiver?.sendMessage(
-                                "§e[FancyTimber Debug] §cScan Aborted! Building block next to foliage: §e$adjType §fat [§a$adjX, $adjY, $adjZ§f]"
-                            )
-                            return null
-                        }
+                // Enforce strict 6-directional cardinal stepping for Leaves blocks
+                val pureLeaf = isPureLeaf(adjType)
+                if (pureLeaf && stepManhattan > 1) continue
 
-                        if (TimberUtils.isFoliage(adjType)) {
-                            val packed = packPos(adjX, adjY, adjZ)
-                            if (packed !in visitedFoliagePos) {
-                                val adjFamily = TimberUtils.getTreeFamily(adjType)
+                val packed = packPos(adjX, adjY, adjZ)
+                if (packed in visitedFoliagePos) continue
 
-                                if (adjFamily == startFamily || adjFamily == "SHARED") {
-                                    val adjBlock = world.getBlockAt(adjX, adjY, adjZ)
-                                    val blockData = adjBlock.blockData
-                                    var belongsToTree = true
+                val adjFamily = TimberUtils.getTreeFamily(adjType)
+                if (adjFamily != startFamily && adjFamily != "SHARED") continue
 
-                                    if (blockData is Leaves) {
-                                        if (blockData.isPersistent) {
-                                            belongsToTree = false
-                                        }
-                                        if (belongsToTree && blockData.distance < dist) {
-                                            belongsToTree = false
-                                        }
-                                    }
-
-                                    if (belongsToTree) {
-                                        var touchesForeignTrunk = false
-                                        for (nx in -1..1) {
-                                            for (ny in -1..1) {
-                                                for (nz in -1..1) {
-                                                    if (nx == 0 && ny == 0 && nz == 0) continue
-                                                    val checkX = adjX + nx
-                                                    val checkY = adjY + ny
-                                                    val checkZ = adjZ + nz
-                                                    val checkType = world.getType(checkX, checkY, checkZ)
-
-                                                    if (TimberUtils.isTrunk(checkType)) {
-                                                        if (packPos(checkX, checkY, checkZ) !in trunkPosSet) {
-                                                            touchesForeignTrunk = true
-                                                            break
-                                                        }
-                                                    }
-                                                }
-                                                if (touchesForeignTrunk) break
-                                            }
-                                            if (touchesForeignTrunk) break
-                                        }
-                                        if (touchesForeignTrunk) {
-                                            belongsToTree = false
-                                        }
-                                    }
-
-                                    if (belongsToTree) {
-                                        visitedFoliagePos.add(packed)
-                                        foliage.add(adjBlock)
-                                        foliageQueue.add(adjBlock)
-                                        distanceQueue.add(dist + 1)
-                                        treeBlocks.add(adjBlock)
-                                        foliageCount++
-                                        weightedLeafScore += max(1, 6 - (dist + 1))
-                                        maxY = max(maxY, adjY)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (debugReceiver != null && evaluatedLeavesCount < 6 &&
+                    (adjType.name.contains("CHERRY") || adjType.name.contains("POPLAR") || pureLeaf)
+                ) {
+                    evaluatedLeavesCount++
+                    debugReceiver.sendMessage(
+                        "§e[FancyTimber Debug] §fLeaf: §6$adjType§f | nextDist=§a$nextDist§f | Fam=§b$adjFamily"
+                    )
                 }
+
+                // Ownership Check 1: Voronoi nearest-trunk arbitration against foreign trunks of the same family
+                if (foreignTrunks.size > 0 && !isOwnedByOwnTree(adjX, adjY, adjZ, ownTrunks, foreignTrunks)) {
+                    continue
+                }
+
+                val adjBlock = world.getBlockAt(adjX, adjY, adjZ)
+                val blockData = adjBlock.blockData
+
+                if (blockData is Leaves) {
+                    if (blockData.isPersistent) continue
+                    // Ownership Check 2: Vanilla Manhattan distance must not be strictly smaller than our cardinal step
+                    if (foreignTrunks.size > 0 && blockData.distance < nextDist) continue
+                }
+
+                visitedFoliagePos.add(packed)
+                foliage.add(adjBlock)
+                foliageQueue.add(adjBlock)
+                distanceQueue.add(nextDist)
+                treeBlocks.add(adjBlock)
+                foliageCount++
+                weightedLeafScore += max(1, 7 - nextDist)
+                maxY = max(maxY, adjY)
             }
         }
 
@@ -295,6 +290,93 @@ object TreeScanner {
             naturalScore = naturalScore,
             isBamboo = false
         )
+    }
+
+    /**
+     * Scans the bounding volume around the felled tree once using direct palette reads
+     * to find any foreign logs belonging to adjacent trees of the same family.
+     */
+    private fun findForeignTrunks(
+        world: World,
+        minX: Int,
+        maxX: Int,
+        minY: Int,
+        maxY: Int,
+        minZ: Int,
+        maxZ: Int,
+        startFamily: String,
+        ownTrunkPosSet: Set<Long>
+    ): IntPointList {
+        val foreign = IntPointList(16)
+        val margin = 6
+        val scanMinX = minX - margin
+        val scanMaxX = maxX + margin
+        val scanMinZ = minZ - margin
+        val scanMaxZ = maxZ + margin
+        val scanMinY = max(world.minHeight, minY - 2)
+        val scanMaxY = min(world.maxHeight - 1, maxY + margin)
+
+        for (x in scanMinX..scanMaxX) {
+            val chunkX = x shr 4
+            for (z in scanMinZ..scanMaxZ) {
+                if (!world.isChunkLoaded(chunkX, z shr 4)) continue
+                for (y in scanMinY..scanMaxY) {
+                    val type = world.getType(x, y, z)
+                    if (!TimberUtils.isTrunk(type)) continue
+
+                    val packed = packPos(x, y, z)
+                    if (packed in ownTrunkPosSet) continue
+
+                    val family = TimberUtils.getTreeFamily(type)
+                    if (family == startFamily || family == "SHARED") {
+                        foreign.add(x, y, z)
+                    }
+                }
+            }
+        }
+        return foreign
+    }
+
+    /**
+     * Determines leaf ownership by comparing 3D Manhattan distance (with Euclidean tie-breaker)
+     * against our tree's trunks vs. any nearby foreign trunks.
+     */
+    private fun isOwnedByOwnTree(
+        x: Int,
+        y: Int,
+        z: Int,
+        ownTrunks: IntPointList,
+        foreignTrunks: IntPointList
+    ): Boolean {
+        var minOwnManhattan = Int.MAX_VALUE
+        var minOwnDistSq = Int.MAX_VALUE
+        for (i in 0 until ownTrunks.size) {
+            val dx = abs(x - ownTrunks.xs[i])
+            val dy = abs(y - ownTrunks.ys[i])
+            val dz = abs(z - ownTrunks.zs[i])
+            val manhattan = dx + dy + dz
+            val distSq = dx * dx + dy * dy + dz * dz
+            if (manhattan < minOwnManhattan) minOwnManhattan = manhattan
+            if (distSq < minOwnDistSq) minOwnDistSq = distSq
+        }
+
+        var minForeignManhattan = Int.MAX_VALUE
+        var minForeignDistSq = Int.MAX_VALUE
+        for (i in 0 until foreignTrunks.size) {
+            val dx = abs(x - foreignTrunks.xs[i])
+            val dy = abs(y - foreignTrunks.ys[i])
+            val dz = abs(z - foreignTrunks.zs[i])
+            val manhattan = dx + dy + dz
+            val distSq = dx * dx + dy * dy + dz * dz
+            if (manhattan < minForeignManhattan) minForeignManhattan = manhattan
+            if (distSq < minForeignDistSq) minForeignDistSq = distSq
+        }
+
+        if (minOwnManhattan != minForeignManhattan) {
+            return minOwnManhattan < minForeignManhattan
+        }
+        // On exact Manhattan ties, require strictly closer Euclidean distance so adjacent trees aren't stripped
+        return minOwnDistSq < minForeignDistSq
     }
 
     private fun detectTrunkRadius(world: World, x: Int, y: Int, z: Int): Int {
@@ -368,5 +450,28 @@ object TreeScanner {
         if (horizontalRatio > 3.0) score -= 0.25 else if (horizontalRatio > 2.0) score += 0.05 else score += 0.15
 
         return score.coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Primitive IntArray-backed coordinate buffer to avoid boxing & Block wrapper allocations.
+     */
+    private class IntPointList(initialCapacity: Int) {
+        var xs = IntArray(initialCapacity)
+        var ys = IntArray(initialCapacity)
+        var zs = IntArray(initialCapacity)
+        var size = 0
+
+        fun add(x: Int, y: Int, z: Int) {
+            if (size == xs.size) {
+                val newCap = xs.size * 2
+                xs = xs.copyOf(newCap)
+                ys = ys.copyOf(newCap)
+                zs = zs.copyOf(newCap)
+            }
+            xs[size] = x
+            ys[size] = y
+            zs[size] = z
+            size++
+        }
     }
 }

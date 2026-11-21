@@ -208,7 +208,10 @@ class TreeFallAnimation(
                 )
             }
             tick++
-        } catch (e: Exception) {
+        } catch (_: IllegalStateException) {
+            finishFall()
+            scheduledTask?.cancel()
+        } catch (_: IllegalArgumentException) {
             finishFall()
             scheduledTask?.cancel()
         }

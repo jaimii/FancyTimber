@@ -29,11 +29,13 @@ import kotlin.math.sqrt
 
 object TimberUtils {
 
-    private val tintedLeavesParticle: Particle? = try { Particle.valueOf("TINTED_LEAVES") } catch (e: Exception) { null }
-    private val paleOakLeavesParticle: Particle? = try { Particle.valueOf("PALE_OAK_LEAVES") } catch (e: Exception) { null }
-    private val crimsonSporeParticle: Particle? = try { Particle.valueOf("CRIMSON_SPORE") } catch (e: Exception) { null }
-    private val warpedSporeParticle: Particle? = try { Particle.valueOf("WARPED_SPORE") } catch (e: Exception) { null }
-    private val fallingNectarParticle: Particle? = try { Particle.valueOf("FALLING_NECTAR") } catch (e: Exception) { null }
+    private fun particleOrNull(name: String): Particle? = Particle.entries.firstOrNull { it.name == name }
+
+    private val tintedLeavesParticle: Particle? = particleOrNull("TINTED_LEAVES")
+    private val paleOakLeavesParticle: Particle? = particleOrNull("PALE_OAK_LEAVES")
+    private val crimsonSporeParticle: Particle? = particleOrNull("CRIMSON_SPORE")
+    private val warpedSporeParticle: Particle? = particleOrNull("WARPED_SPORE")
+    private val fallingNectarParticle: Particle? = particleOrNull("FALLING_NECTAR")
 
     // O(1) Bitwise EnumSet & EnumMap caches initialized once at startup
     private val TRUNK_MATERIALS: EnumSet<Material> = EnumSet.noneOf(Material::class.java)

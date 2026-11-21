@@ -48,13 +48,29 @@ object ProtectionManager {
         ensureInitialized()
     }
 
+    private inline fun <T> runReflectively(default: T, block: () -> T): T {
+        return try {
+            block()
+        } catch (_: ReflectiveOperationException) {
+            default
+        } catch (_: LinkageError) {
+            default
+        } catch (_: IllegalArgumentException) {
+            default
+        } catch (_: ClassCastException) {
+            default
+        } catch (_: IllegalStateException) {
+            default
+        }
+    }
+
     @Synchronized
     private fun ensureInitialized() {
         if (initialized) return
 
         // 1. Initialize WorldGuard cache
         if (Bukkit.getPluginManager().isPluginEnabled("WorldGuard")) {
-            try {
+            hasWorldGuard = runReflectively(false) {
                 val wgClass = Class.forName("com.sk89q.worldguard.WorldGuard")
                 val wgInstance = wgClass.getMethod("getInstance").invoke(null)
                 val platform = wgClass.getMethod("getPlatform").invoke(wgInstance)
@@ -79,15 +95,13 @@ object ProtectionManager {
                 val localPlayerClass = Class.forName("com.sk89q.worldguard.LocalPlayer")
                 val locClass = Class.forName("com.sk89q.worldedit.util.Location")
                 wgTestStateMethod = queryObj.javaClass.getMethod("testState", locClass, localPlayerClass, wgFlagArray!!.javaClass)
-                hasWorldGuard = true
-            } catch (t: Throwable) {
-                hasWorldGuard = false
+                true
             }
         }
 
         // 2. Initialize GriefPrevention cache
         if (Bukkit.getPluginManager().isPluginEnabled("GriefPrevention")) {
-            try {
+            hasGriefPrevention = runReflectively(false) {
                 val gpClass = Class.forName("me.ryanhamshire.GriefPrevention.GriefPrevention")
                 val gpInstance = gpClass.getMethod("instance").invoke(null)
                 gpDataStore = gpClass.getField("dataStore").get(gpInstance)
@@ -98,35 +112,29 @@ object ProtectionManager {
                     Boolean::class.javaPrimitiveType,
                     claimClass
                 )
-                hasGriefPrevention = true
-            } catch (t: Throwable) {
-                hasGriefPrevention = false
+                true
             }
         }
 
         // 3. Initialize Towny cache
         if (Bukkit.getPluginManager().isPluginEnabled("Towny")) {
-            try {
+            hasTowny = runReflectively(false) {
                 val townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI")
                 townyInstance = townyAPIClass.getMethod("getInstance").invoke(null)
                 townyDestroyMethod = townyAPIClass.getMethod("isDestroyApproved", Player::class.java, Location::class.java)
-                hasTowny = true
-            } catch (t: Throwable) {
-                hasTowny = false
+                true
             }
         }
 
         // 4. Initialize LWC cache
         if (Bukkit.getPluginManager().isPluginEnabled("LWC")) {
-            try {
+            hasLWC = runReflectively(false) {
                 val lwcClass = Class.forName("com.griefcraft.lwc.LWC")
                 lwcInstance = lwcClass.getMethod("getInstance").invoke(null)
                 lwcFindProtectionMethod = lwcClass.getMethod("findProtection", Block::class.java)
                 val protClass = Class.forName("com.griefcraft.model.Protection")
                 lwcCanAccessMethod = lwcClass.getMethod("canAccessProtection", Player::class.java, protClass)
-                hasLWC = true
-            } catch (t: Throwable) {
-                hasLWC = false
+                true
             }
         }
 
@@ -157,53 +165,37 @@ object ProtectionManager {
         return true
     }
 
-    private fun checkWorldGuard(player: Player, block: Block): Boolean {
-        return try {
-            val query = wgCreateQueryMethod!!.invoke(wgRegionContainer)
-            val localLocation = wgAdaptLocMethod!!.invoke(null, block.location)
-            val localPlayer = wgWrapPlayerMethod!!.invoke(wgPluginInst, player)
-            wgTestStateMethod!!.invoke(query, localLocation, localPlayer, wgFlagArray) as Boolean
-        } catch (e: Exception) {
+    private fun checkWorldGuard(player: Player, block: Block): Boolean = runReflectively(true) {
+        val query = wgCreateQueryMethod!!.invoke(wgRegionContainer)
+        val localLocation = wgAdaptLocMethod!!.invoke(null, block.location)
+        val localPlayer = wgWrapPlayerMethod!!.invoke(wgPluginInst, player)
+        wgTestStateMethod!!.invoke(query, localLocation, localPlayer, wgFlagArray) as Boolean
+    }
+
+    private fun checkGriefPrevention(player: Player, block: Block): Boolean = runReflectively(true) {
+        val claim = gpGetClaimAtMethod!!.invoke(gpDataStore, block.location, true, null)
+        if (claim != null) {
+            val reason = claim.javaClass.getMethod(
+                "allowBreak",
+                Player::class.java,
+                Material::class.java,
+                Location::class.java
+            ).invoke(claim, player, block.type, block.location)
+            reason == null
+        } else {
             true
         }
     }
 
-    private fun checkGriefPrevention(player: Player, block: Block): Boolean {
-        return try {
-            val claim = gpGetClaimAtMethod!!.invoke(gpDataStore, block.location, true, null)
-            if (claim != null) {
-                val reason = claim.javaClass.getMethod(
-                    "allowBreak",
-                    Player::class.java,
-                    Material::class.java,
-                    Location::class.java
-                ).invoke(claim, player, block.type, block.location)
-                reason == null
-            } else {
-                true
-            }
-        } catch (e: Exception) {
-            true
-        }
+    private fun checkTowny(player: Player, block: Block): Boolean = runReflectively(true) {
+        townyDestroyMethod!!.invoke(townyInstance, player, block.location) as Boolean
     }
 
-    private fun checkTowny(player: Player, block: Block): Boolean {
-        return try {
-            townyDestroyMethod!!.invoke(townyInstance, player, block.location) as Boolean
-        } catch (e: Exception) {
-            true
-        }
-    }
-
-    private fun checkLWC(player: Player, block: Block): Boolean {
-        return try {
-            val protection = lwcFindProtectionMethod!!.invoke(lwcInstance, block)
-            if (protection != null) {
-                lwcCanAccessMethod!!.invoke(lwcInstance, player, protection) as Boolean
-            } else {
-                true
-            }
-        } catch (e: Exception) {
+    private fun checkLWC(player: Player, block: Block): Boolean = runReflectively(true) {
+        val protection = lwcFindProtectionMethod!!.invoke(lwcInstance, block)
+        if (protection != null) {
+            lwcCanAccessMethod!!.invoke(lwcInstance, player, protection) as Boolean
+        } else {
             true
         }
     }
